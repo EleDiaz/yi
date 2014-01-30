@@ -29,7 +29,7 @@ input (prefix), but produce conflicting output?
 * if the output is the same (as by the PEq class), then the processes (prefixes) are "merged"
 * if a Write is more prioritized than the other, the one with low priority will be discarded
 * otherwise, the output will be delayed until one of the branches can be discarded.
-* if there is no way to disambiguate, then no output will be generated anymore. 
+* if there is no way to disambiguate, then no output will be generated anymore.
   This situation can be detected by using 'possibleActions' however.
 -}
 
@@ -59,10 +59,10 @@ module Yi.Interact
 import Control.Arrow (first)
 import Control.Monad.State hiding ( get, mapM )
 import Data.Monoid
-import Yi.Prelude
-import Prelude ()
-import Data.Maybe
-import Data.List (filter, map, groupBy)
+import Control.Applicative
+import Data.List (groupBy)
+import Data.Function (on)
+import Yi.Utils
 ------------------------------------------------
 -- Classes
 
@@ -126,7 +126,7 @@ instance PEq w => MonadPlus (I event w) where
 instance PEq w => MonadInteract (I event w) w event where
     write = Writes
     eventBounds = Gets
-    adjustPriority dp = Priority dp
+    adjustPriority = Priority
 
 
 infixl 3 <||
@@ -140,10 +140,10 @@ a <|| b = a <|> (deprioritize >> b)
 (||>) = flip (<||)
 
 -- | Convert a process description to an "executable" process.
-mkProcess :: PEq w => I ev w a -> ((a -> P ev w) -> P ev w)
+mkProcess :: PEq w => I ev w a -> (a -> P ev w) -> P ev w
 mkProcess (Returns x) = \fut -> fut x
-mkProcess Fails = (\_fut -> Fail)
-mkProcess (m `Binds` f) = \fut -> (mkProcess m) (\a -> mkProcess (f a) fut)
+mkProcess Fails = const Fail
+mkProcess (m `Binds` f) = \fut -> mkProcess m (\a -> mkProcess (f a) fut)
 mkProcess (Gets l h) = Get l h
 mkProcess (Writes w) = \fut -> Write w (fut ())
 mkProcess (Priority p) = \fut -> Prior p (fut ())
@@ -167,7 +167,7 @@ accepted :: (Show ev) => Int -> P ev w -> [[String]]
 accepted 0 _ = [[]]
 accepted d (Get (Just low) (Just high) k) = do
     t <- accepted (d - 1) (k low)
-    let h = if low == high then show low else (show low ++ ".." ++ show high)
+    let h = if low == high then show low else show low ++ ".." ++ show high
     return (h : t)
 accepted _ (Get Nothing Nothing _) = [["<any>"]]
 accepted _ (Get Nothing (Just e) _) = [[".." ++ show e]]
@@ -216,7 +216,7 @@ instance Monoid (InteractState event w) where
     -- ambiguity remains
     mappend (Ambiguous a) (Ambiguous b) = Ambiguous (a ++ b)
     mempty = Ambiguous []
-    
+
 
 -- | find all the writes that are accessible.
 findWrites :: Int -> P event w -> InteractState event w
@@ -225,8 +225,8 @@ findWrites p (Write w c) = Ambiguous [(p,w,c)]
 findWrites p (Prior dp c) = findWrites (p+dp) c
 findWrites _ Fail = Dead
 findWrites _ End = Dead
-findWrites _ (Get _ _ _) = Waiting
-findWrites p (Chain a b) = case computeState a of 
+findWrites _ (Get{})     = Waiting
+findWrites p (Chain a b) = case computeState a of
     Dead -> Dead
     Ambiguous _ -> Dead -- If ambiguity, don't try to do anything clever for now; die.
     Running w c -> findWrites p (Chain c (pushEvent b w)) -- pull as much as possible from the left automaton
@@ -238,14 +238,14 @@ findWrites p (Chain a b) = case computeState a of
 
 computeState :: PEq w => P event w -> InteractState event  w
 computeState a = case findWrites 0 a of
-    Ambiguous actions -> let prior = minimum $ map fst3 $ actions
+    Ambiguous actions -> let prior = minimum $ map fst3 actions
                              bests = groupBy (equiv `on` snd3) $ filter ((prior ==) . fst3) actions
                          in case bests of
-                              [((_,w,c):_)] -> Running w c
+                              [(_,w,c):_] -> Running w c
                               _ -> Ambiguous $ map head bests
     s -> s
-                           
-                           
+
+
 
 pullWrites :: PEq w => P event w -> ([w], P event w)
 pullWrites a = case computeState a of

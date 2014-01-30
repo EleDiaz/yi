@@ -2,8 +2,8 @@ module Yi.Keymap.Vim2.Ex.Commands.Substitute
     ( parse
     ) where
 
-import Prelude ()
-import Yi.Prelude
+import Control.Applicative
+import Control.Monad
 
 import qualified Text.ParserCombinators.Parsec as P
 
@@ -16,12 +16,12 @@ import Yi.Search
 parse :: String -> Maybe ExCommand
 parse = Common.parse $ do
     percents <- P.many (P.char '%')
-    discard $ P.try (P.string "substitute") <|> P.string "s"
+    void $ P.try (P.string "substitute") <|> P.string "s"
     delimiter <- P.oneOf "!@#$%^&*()[]{}<>/.,~';:?-="
     from <- P.many (P.noneOf [delimiter])
-    discard $ P.char delimiter
+    void $ P.char delimiter
     to <- P.many (P.noneOf [delimiter])
-    discard $ P.char delimiter
+    void $ P.char delimiter
     flagChars <- P.many (P.oneOf "gi")
     return $! substitute from to delimiter
         ('g' `elem` flagChars)
@@ -40,7 +40,7 @@ substitute from to delimiter global caseInsensitive allLines = Common.pureExComm
         let regex = makeSimpleSearch from
             replace = do
                 region <- regionOfB Line
-                discard $ searchAndRepRegion0 regex to global region
+                void $ searchAndRepRegion0 regex to global region
 
         if allLines
         then withEveryLineB replace

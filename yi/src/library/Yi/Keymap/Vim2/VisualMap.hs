@@ -2,11 +2,12 @@ module Yi.Keymap.Vim2.VisualMap
   ( defVisualMap
   ) where
 
-import Yi.Prelude
-import Prelude ()
+import Control.Applicative
+import Control.Monad
+import Control.Lens hiding (moveTo,(-~),op)
 
 import Data.Char (ord)
-import Data.List (drop, group, length, reverse)
+import Data.List (group)
 import Data.Maybe (fromJust)
 
 import Yi.Buffer hiding (Insert)
@@ -17,6 +18,8 @@ import Yi.Keymap.Vim2.StateUtils
 import Yi.Keymap.Vim2.StyledRegion
 import Yi.Keymap.Vim2.Utils
 import Yi.MiniBuffer
+import Yi.Utils
+import Yi.Monad
 
 defVisualMap :: [VimOperator] -> [VimBinding]
 defVisualMap operators =
@@ -35,7 +38,7 @@ escBinding = VimBindingE prereq action
               clrStatus
               withBuffer0 $ do
                   setVisibleSelection False
-                  putA regionStyleA Inclusive
+                  assign regionStyleA Inclusive
               switchModeE Normal
               return Drop
 
@@ -44,7 +47,7 @@ exBinding = VimBindingE prereq action
     where prereq ":" (VimState { vsMode = (Visual _) }) = WholeMatch ()
           prereq _ _ = NoMatch
           action _ = do
-              discard $ spawnMinibufferE ":'<,'>" id
+              void $ spawnMinibufferE ":'<,'>" id
               switchModeE Ex
               return Finish
 
@@ -73,7 +76,7 @@ setMarkBinding = VimBindingE prereq action
           prereq _ _ = NoMatch
           action ('m':c:[]) = do
               withBuffer0 $ setNamedMarkHereB [c]
-              return Continue 
+              return Continue
           action _ = error "Can't happen"
 
 changeVisualStyleBinding :: VimBinding
@@ -89,13 +92,12 @@ changeVisualStyleBinding = VimBindingE prereq action
                                  _ -> error "Can't happen because of prereq, this just prevents warning"
                   newMode = Visual newStyle
               if newMode == currentMode
-              then do
-                  vbeAction escBinding "<Esc>"
+              then vbeAction escBinding "<Esc>"
               else do
                   modifyStateE $ \s -> s { vsMode = newMode }
                   withBuffer0 $ do
-                      putA regionStyleA newStyle
-                      putA rectangleSelectionA $ Block == newStyle
+                      assign regionStyleA newStyle
+                      assign rectangleSelectionA $ Block == newStyle
                       setVisibleSelection True
                   return Finish
 
@@ -155,7 +157,7 @@ shiftDBinding = VimBindingE prereq action
                       startCol <- curCol
                       forM_ (reverse [0 .. length lengths - 1]) $ \l -> do
                           moveTo start
-                          discard $ lineMoveRel l
+                          void $ lineMoveRel l
                           whenM (fmap (== startCol) curCol) deleteToEol
                       leftOnEol
                   _ ->  do
@@ -163,15 +165,14 @@ shiftDBinding = VimBindingE prereq action
                       reg'' <- withBuffer0 $ mkRegionOfStyleB (regionStart reg')
                                                               (regionEnd reg' -~ Size 1)
                                                               Exclusive
-                      discard $ operatorApplyToRegionE opDelete 1 $ StyledRegion LineWise reg''
+                      void $ operatorApplyToRegionE opDelete 1 $ StyledRegion LineWise reg''
               resetCountE
               switchModeE Normal
               return Finish
 
 mkOperatorBinding :: VimOperator -> VimBinding
 mkOperatorBinding op = VimBindingE prereq action
-    where prereq evs (VimState { vsMode = (Visual _) }) =
-              evs `matchesString` (operatorName op)
+    where prereq evs (VimState { vsMode = (Visual _) }) = evs `matchesString` operatorName op
           prereq _ _ = NoMatch
           action _ = do
               (Visual style) <- vsMode <$> getDynamic
@@ -182,7 +183,7 @@ mkOperatorBinding op = VimBindingE prereq action
               clrStatus
               withBuffer0 $ do
                   setVisibleSelection False
-                  putA regionStyleA Inclusive
+                  assign regionStyleA Inclusive
               return token
 
 replaceBinding :: VimBinding

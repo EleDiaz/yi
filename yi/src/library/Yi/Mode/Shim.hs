@@ -1,36 +1,34 @@
-{-# LANGUAGE DeriveDataTypeable #-}
-
 module Yi.Mode.Shim where
-    
+
 import Control.Monad.State
 import Data.Char
 import Data.List
 import qualified Data.List.PointedList.Circular as PL
 import FastString
 import Outputable hiding (char)
-import Prelude ()
+
 import Shim.Hsinfo as Hsinfo
 import SrcLoc
 import Yi
 import Yi.Buffer
 import Yi.GHC
-import Yi.Prelude
+
 import qualified Shim.Hsinfo as Hsinfo
 
 jumpToSrcLoc :: SrcLoc -> YiM ()
-jumpToSrcLoc locn = 
-    if isGoodSrcLoc locn 
+jumpToSrcLoc locn =
+    if isGoodSrcLoc locn
        then jumpToE (unpackFS $ srcLocFile locn) (srcLocLine locn) (srcLocCol locn)
        else msgEditor $ show (ppr locn defaultUserStyle)
 
 jumpToNextNote :: YiM ()
 jumpToNextNote = do
   note <- withEditor $ do
-    modA notesA (fmap PL.next)
-    getsA notesA (fmap PL.focus)
+    (%=) notesA (fmap PL.next)
+    uses notesA (fmap PL.focus)
   case note of
     Nothing -> msgEditor "No note!"
-    Just n -> jumpToSrcLoc $ srcSpanStart $ srcSpan $ n
+    Just n -> jumpToSrcLoc $ srcSpanStart $ srcSpan n
 
 -- | Position of the cursor
 cursorPos :: BufferM (Maybe String, Int, Int)
@@ -40,8 +38,7 @@ cursorPos = (,,) <$> gets file <*> curLn <*> curCol
 typeAtPos :: YiM String
 typeAtPos = do
   (Just filename,line,col) <- withBuffer cursorPos
-  withShim $ do
-      Hsinfo.findTypeOfPos filename line col Nothing
+  withShim $ Hsinfo.findTypeOfPos filename line col Nothing
 
 -- | Annotate the current function with its type
 annotType :: YiM ()
@@ -57,7 +54,7 @@ annotValue = do
   lnReg <- withBuffer $ regionOfB Yi.Line
   Just sourcefile <- withBuffer $ gets file
   ln <- withBuffer $ readRegionB lnReg
-  let lhs = takeWhile (/= '=') $ dropWhile (== '-') $ dropWhile isSpace $ ln
+  let lhs = takeWhile (/= '=') $ dropWhile (== '-') $ dropWhile isSpace ln
   newVal <- withShim $ do
                ses <- getSessionFor sourcefile
                evaluate ses lhs
@@ -75,21 +72,19 @@ minorMode :: Mode syntax -> Mode syntax
 minorMode m = m
    {
     modeName = modeName m ++ "+shim",
-    modeKeymap = modeKeymap m . ((<||) 
-      (((ctrl $ char 'c') ?>> choice
-        [ctrl (char 't') ?>>! typeAtPos,
-         char '!' ?>> char 't' ?>>! annotType,
-         char '!' ?>> char '=' ?>>! annotType,
-         ctrl (char 'd') ?>>! jumpToDefinition,
-         ctrl (char 'l') ?>>! do
-             withEditor $ do
-                 withOtherWindow $ do
-                     switchToBufferWithNameE "*messages*"
-             msgEditor "Loading..."
-             Just filename <- withBuffer $ gets file
-             runShimThread (Hsinfo.load filename True Nothing >> return ())
-             return ()
+    modeKeymap = modeKeymap m . (<||)
+      ((ctrl (char 'c') ?>> choice
+       [ctrl (char 't') ?>>! typeAtPos,
+        char '!' ?>> char 't' ?>>! annotType,
+        char '!' ?>> char '=' ?>>! annotType,
+        ctrl (char 'd') ?>>! jumpToDefinition,
+        ctrl (char 'l') ?>>! do
+            withEditor $ withOtherWindow $ switchToBufferWithNameE "*messages*"
+            msgEditor "Loading..."
+            Just filename <- withBuffer $ gets file
+            runShimThread $ void (Hsinfo.load filename True Nothing)
+            return ()
          ]
-       ) <|> (ctrl (char 'x') ?>> char '`' ?>>! jumpToNextNote)))
+       ) <|> (ctrl (char 'x') ?>> char '`' ?>>! jumpToNextNote))
    }
 

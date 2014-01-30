@@ -11,16 +11,16 @@ module Yi.PersistentState(loadPersistentState,
                           maxHistoryEntries)
 where
 
-import Prelude hiding ((.))
+import Data.Typeable
 import Data.Binary
 import Data.DeriveTH
-import Data.Accessor.Template(nameDeriveAccessors)
+import Data.Default
 import System.Directory(doesFileExist)
 import qualified Data.Map as M
 
 import Control.Exc(ignoringException)
+import Control.Lens
 
-import Yi.Prelude
 import Yi.Dynamic
 import Yi.Config.Simple.Types(customVariable, Field)
 import Yi.History
@@ -31,7 +31,7 @@ import Yi.KillRing(Killring(..))
 import Yi.Search(getRegexE, setRegexE)
 import Yi.Regex(SearchExp(..))
 import Yi.Paths(getPersistentStateFilename)
-
+import Yi.Utils
 
 data PersistentState = PersistentState { histories     :: !Histories
                                        , vimTagStack   :: !VimTagStack
@@ -44,15 +44,15 @@ $(derive makeBinary ''PersistentState)
 newtype MaxHistoryEntries = MaxHistoryEntries { unMaxHistoryEntries :: Int }
   deriving(Typeable, Binary)
 
-instance Initializable MaxHistoryEntries where
-  initial = MaxHistoryEntries 1000
+instance Default MaxHistoryEntries where
+  def = MaxHistoryEntries 1000
 
 instance YiConfigVariable MaxHistoryEntries
 
-$(nameDeriveAccessors ''MaxHistoryEntries (\n -> Just (n ++ "A")))
+makeLensesWithSuffix "A" ''MaxHistoryEntries
 
 maxHistoryEntries :: Field Int
-maxHistoryEntries = unMaxHistoryEntriesA . customVariable
+maxHistoryEntries = customVariable . unMaxHistoryEntriesA
 
 -- | Trims per-command histories to contain at most N completions each.
 trimHistories :: Int -> Histories -> Histories
@@ -69,23 +69,25 @@ trimTagStack maxHistory = VimTagStack . take maxHistory . tagsStack
 --   We assume each command is a single line.
 --   To add new components, one has to:
 --
---   * add new field in @PersistentState@ structure, 
+--   * add new field in @PersistentState@ structure,
 --   * add write and read parts in @loadPersistentState@/@savePersistentState@,
 --   * add a trimming code in @savePersistentState@ to prevent blowing up
 --     of save file.
 savePersistentState :: YiM ()
-savePersistentState = do MaxHistoryEntries histLimit <- withEditor $ askConfigVariableA
-                         pStateFilename      <- getPersistentStateFilename
-                         (hist :: Histories) <- withEditor $ getA dynA
-                         tagStack            <- withEditor $ getTagStack
-                         kr                  <- withEditor $ getA killringA
-                         curRe               <- withEditor $ getRegexE
-                         let pState = PersistentState { histories     = trimHistories histLimit hist
-                                                      , vimTagStack   = trimTagStack  histLimit tagStack
-                                                      , aKillring     = kr    -- trimmed during normal operation
-                                                      , aCurrentRegex = curRe -- just a single value -> no need to trim
-                                                      }
-                         io $ encodeFile pStateFilename $ pState
+savePersistentState = do
+    MaxHistoryEntries histLimit <- withEditor askConfigVariableA
+    pStateFilename      <- getPersistentStateFilename
+    (hist :: Histories) <- withEditor $ use dynA
+    tagStack            <- withEditor   getTagStack
+    kr                  <- withEditor $ use killringA
+    curRe               <- withEditor   getRegexE
+    let pState = PersistentState {
+                   histories     = trimHistories histLimit hist
+                 , vimTagStack   = trimTagStack  histLimit tagStack
+                 , aKillring     = kr    -- trimmed during normal operation
+                 , aCurrentRegex = curRe -- just a single value -> no need to trim
+                 }
+    io $ encodeFile pStateFilename pState
 
 -- | Reads and decodes a persistent state in both strict, and exception robust
 --   way.
@@ -101,11 +103,12 @@ readPersistentState = do pStateFilename <- getPersistentStateFilename
 
 -- | Loads a persistent state, and sets Yi state variables accordingly.
 loadPersistentState :: YiM ()
-loadPersistentState = do maybePState <- readPersistentState
-                         case maybePState of
-                           Nothing     -> return ()
-                           Just pState -> do withEditor $ putA dynA                   $ histories     pState
-                                             withEditor $ setTagStack                 $ vimTagStack   pState
-                                             withEditor $ putA killringA              $ aKillring     pState
-                                             withEditor $ maybe (return ()) setRegexE $ aCurrentRegex pState
+loadPersistentState = do
+    maybePState <- readPersistentState
+    case maybePState of
+      Nothing     -> return ()
+      Just pState -> do withEditor $ assign dynA                 $ histories     pState
+                        withEditor $ setTagStack                 $ vimTagStack   pState
+                        withEditor $ assign killringA            $ aKillring     pState
+                        withEditor $ maybe (return ()) setRegexE $ aCurrentRegex pState
 

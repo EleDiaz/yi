@@ -1,19 +1,22 @@
-{-# LANGUAGE FlexibleInstances, TypeFamilies #-}
+{-# LANGUAGE
+  FlexibleInstances,
+  DeriveFunctor,
+  DeriveFoldable,
+  TypeFamilies #-}
 {-# OPTIONS_GHC -fno-warn-incomplete-patterns #-} -- uniplate patterns
 -- Copyright (c) JP Bernardy 2008
 module Yi.Syntax.Latex where
 
+import Control.Applicative
 import Yi.IncrementalParse
 import Yi.Lexer.Alex
 import Yi.Lexer.Latex
 import Yi.Style
 import Yi.Syntax.Tree
 import Yi.Syntax
-import Yi.Prelude 
-import Prelude ()
-import Data.Monoid (Endo(..), mappend, mempty)
-import Data.List (zip)
-
+import Data.Monoid
+import Data.Traversable
+import Data.Foldable (Foldable, foldMap)
 
 isNoise :: Token -> Bool
 isNoise Text = True
@@ -34,35 +37,24 @@ data Tree t
     | Atom t
     | Error t
     | Expr (Expr t)
-      deriving Show
-
-
-
---instance Functor Tree where
---  fmap = fmapDefault
-
-instance Foldable Tree where
-    foldMap f (Atom t) = f t
-    foldMap f (Error t ) = f t
-    foldMap f (Paren l g r) = f l <> foldMap f g <> f r
-    foldMap f (Expr g) = foldMap (foldMap f) g
+      deriving (Show, Functor, Foldable)
 
 
 instance IsTree Tree where
     uniplate (Paren l g r) = ([g], \[g'] -> Paren l g' r)
     uniplate (Expr g) = (g, Expr)
-    uniplate t = ([],\_ -> t)
+    uniplate t = ([],const t)
     emptyNode = Expr []
 
 parse :: P TT (Tree TT)
 parse = pExpr True <* eof
-    where 
+    where
       -- | Create a special character symbol
       newT c = tokFromT (Special c)
-      -- errT = (\next -> case next of 
+      -- errT = (\next -> case next of
       --     Nothing -> newT '!'
       --     Just (Tok {tokPosn = posn}) -> Tok { tokT = Special '!', tokPosn = posn-1, tokSize = 1 -- FIXME: size should be 1 char, not one byte!
-      --                      }) <$> lookNext 
+      --                      }) <$> lookNext
       errT = pure (newT '!')
       -- | parse a special symbol
       sym' p = symbol (p . tokT)
@@ -80,10 +72,10 @@ parse = pExpr True <* eof
       pBlock = sym' isBegin >>= \beg@Tok {tokT = Begin env} -> Paren <$> pure beg <*> pExpr True <*> pleaseSym (End env)
 
       pTree :: Bool -> P TT (Tree TT)
-      pTree outsideMath = 
-          (if outsideMath then pBlock <|> (Paren <$> sym (Special '$') <*> pExpr False <*> pleaseSym (Special '$')) 
+      pTree outsideMath =
+          (if outsideMath then pBlock <|> (Paren <$> sym (Special '$') <*> pExpr False <*> pleaseSym (Special '$'))
                            else empty)
-          <|> foldr1 (<|>) [(Paren <$> sym l <*> pExpr outsideMath <*> pleaseSym r) | (l,r) <- parens]
+          <|> foldr1 (<|>) [Paren <$> sym l <*> pExpr outsideMath <*> pleaseSym r | (l,r) <- parens]
           <|> (Atom <$> sym' isNoise)
           <|> (Error <$> recoverWith (sym' (not . ((||) <$> isNoise <*> (`elem` openParens)))))
 
@@ -96,28 +88,27 @@ getStrokes point _begin _end t0 = appEndo result []
           getStrokes' (Paren l g r)
               -- we have special treatment for (Begin, End) because these blocks are typically very large.
               -- we don't force the "end" part to prevent parsing the whole file.
-              | isBegin (tokT l) = if (posnOfs $ tokPosn $ l) /= point 
+              | isBegin (tokT l) = if posnOfs (tokPosn l) /= point
                   then normalPaint
                   else case (tokT l, tokT r) of
                          (Begin b, End e) | b == e -> hintPaint
-                         _ -> errPaint 
+                         _ -> errPaint
               | isErrorTok (tokT r) = errPaint
               -- left paren wasn't matched: paint it in red.
               -- note that testing this on the "Paren" node actually forces the parsing of the
               -- right paren, undermining online behaviour.
-              | (posnOfs $ tokPosn $ l) == point || (posnOfs $ tokPosn $ r) == point - 1
-               = hintPaint
+              | posnOfs (tokPosn l) == point || posnOfs (tokPosn r) == point - 1 = hintPaint
               | otherwise = normalPaint
               where normalPaint = ts id l <> getStrokes' g <> tsEnd id l r
                     hintPaint = ts (modStroke hintStyle) l <> getStrokes' g <> tsEnd (modStroke hintStyle) l r
                     errPaint = ts (modStroke errorStyle) l <> getStrokes' g
 
-          tsEnd _ (Tok{tokT = Begin b}) t@(Tok{tokT = End e}) 
+          tsEnd _ (Tok{tokT = Begin b}) t@(Tok{tokT = End e})
               | b /= e = ts (modStroke errorStyle) t
           tsEnd f _ t = ts f t
           getStrokesL :: Expr TT -> Endo [Stroke]
           getStrokesL = foldMap getStrokes'
-          ts f t 
+          ts f t
               | isErrorTok (tokT t) = mempty
               | otherwise = Endo (f (tokenToStroke t) :)
           result = getStrokes' t0
@@ -142,6 +133,7 @@ tokenToStyle t =
     End _ -> keywordStyle
     NewCommand -> keywordStyle
 
+{-# ANN isSpecial "HLint: ignore Use String" #-}
 isSpecial :: [Char] -> Token -> Bool
 isSpecial cs (Special c) = c `elem` cs
 isSpecial _  _ = False

@@ -2,10 +2,9 @@ module Yi.Keymap.Vim2.NormalMap
     ( defNormalMap
     ) where
 
-import Yi.Prelude
-import Prelude ()
-
-import Control.Monad (replicateM_)
+import Control.Monad
+import Control.Applicative
+import Control.Lens hiding (moveTo, re)
 
 import Data.Char
 import Data.List (group)
@@ -29,6 +28,7 @@ import Yi.MiniBuffer
 import Yi.Misc
 import Yi.Regex (seInput, makeSearchOptsM)
 import Yi.Search (getRegexE, isearchInitE, setRegexE, makeSimpleSearch)
+import Yi.Monad
 
 mkDigitBinding :: Char -> VimBinding
 mkDigitBinding c = mkBindingE Normal Continue (char c, return (), mutate)
@@ -88,7 +88,11 @@ jumpBindings :: [VimBinding]
 jumpBindings = fmap (mkBindingE Normal Drop)
     [ (ctrlCh 'o', jumpBackE, id)
     , (spec KTab, jumpForwardE, id)
+    , (ctrlCh '^', controlCarrot, resetCount)
+    , (ctrlCh '6', controlCarrot, resetCount)
     ]
+  where
+    controlCarrot = alternateBufferE . (+ (-1)) =<< getCountE
 
 finishingBingings :: [VimBinding]
 finishingBingings = fmap (mkStringBindingE Normal Finish)
@@ -98,7 +102,7 @@ finishingBingings = fmap (mkStringBindingE Normal Finish)
 
     , ("D",
         do region <- withBuffer0 $ regionWithTwoMovesB (return ()) moveToEol
-           discard $ operatorApplyToRegionE opDelete 1 $ StyledRegion Exclusive region
+           void $ operatorApplyToRegionE opDelete 1 $ StyledRegion Exclusive region
         , id)
 
     -- Pasting
@@ -118,7 +122,7 @@ finishingBingings = fmap (mkStringBindingE Normal Finish)
             (StyledRegion s r) <- case stringToMove "j" of
                 WholeMatch m -> regionOfMoveB $ CountedMove (Just count) m
                 _ -> error "can't happen"
-            discard $ lineMoveRel $ count - 1
+            void $ lineMoveRel $ count - 1
             moveToEol
             joinLinesB =<< convertRegionToStyleB r s
        , resetCount)
@@ -130,7 +134,7 @@ pasteBefore = do
     register <- getRegisterE . vsActiveRegister =<< getDynamic
     case register of
         Nothing -> return ()
-        Just (Register LineWise rope) -> withBuffer0 $ when (not $ R.null rope) $
+        Just (Register LineWise rope) -> withBuffer0 $ unless (R.null rope) $
             -- Beware of edge cases ahead
             insertRopeWithStyleB (addNewLineIfNecessary rope) LineWise
         Just (Register style rope) -> withBuffer0 $ pasteInclusiveB rope style
@@ -198,12 +202,12 @@ nonrepeatableBindings = fmap (mkBindingE Normal Drop)
     -- Changing
     , (char 'C',
         do region <- withBuffer0 $ regionWithTwoMovesB (return ()) moveToEol
-           discard $ operatorApplyToRegionE opDelete 1 $ StyledRegion Exclusive region
+           void $ operatorApplyToRegionE opChange 1 $ StyledRegion Exclusive region
         , switchMode $ Insert 'C')
     , (char 's', cutCharE Forward =<< getCountE, switchMode $ Insert 's')
     , (char 'S',
         do region <- withBuffer0 $ regionWithTwoMovesB firstNonSpaceB moveToEol
-           discard $ operatorApplyToRegionE opDelete 1 $ StyledRegion Exclusive region
+           void $ operatorApplyToRegionE opDelete 1 $ StyledRegion Exclusive region
         , switchMode $ Insert 'S')
 
     -- Replacing
@@ -212,14 +216,14 @@ nonrepeatableBindings = fmap (mkBindingE Normal Drop)
     -- Yanking
     , (char 'Y',
         do region <- withBuffer0 $ regionWithTwoMovesB (return ()) moveToEol
-           discard $ operatorApplyToRegionE opYank 1 $ StyledRegion Exclusive region
+           void $ operatorApplyToRegionE opYank 1 $ StyledRegion Exclusive region
         , id)
 
     -- Search
     , (char '*', addJumpHereE >> searchWordE True Forward, resetCount)
     , (char '#', addJumpHereE >> searchWordE True Backward, resetCount)
-    , (char 'n', addJumpHereE >> (withCount $ continueSearching id), resetCount)
-    , (char 'N', addJumpHereE >> (withCount $ continueSearching reverseDir), resetCount)
+    , (char 'n', addJumpHereE >> withCount (continueSearching id), resetCount)
+    , (char 'N', addJumpHereE >> withCount (continueSearching reverseDir), resetCount)
     , (char ';', repeatGotoCharE id, id)
     , (char ',', repeatGotoCharE reverseDir, id)
 
@@ -228,7 +232,7 @@ nonrepeatableBindings = fmap (mkBindingE Normal Drop)
 
     -- Transition to ex
     , (char ':', do
-        discard (spawnMinibufferE ":" id)
+        void (spawnMinibufferE ":" id)
         historyStart
         historyPrefixSet ""
       , switchMode Ex)
@@ -281,7 +285,7 @@ searchWordE wholeWord dir = do
 
     let search re = do
             setRegexE re
-            putA searchDirectionA dir
+            assign searchDirectionA dir
             withCount $ continueSearching (const dir)
 
     if wholeWord
@@ -309,9 +313,9 @@ continueSearching fdir = do
     mbRegex <- getRegexE
     case mbRegex of
         Just regex -> do
-            dir <- fdir <$> getA searchDirectionA
+            dir <- fdir <$> use searchDirectionA
             printMsg $ (if dir == Forward then '/' else '?') : seInput regex
-            discard $ doVimSearch Nothing [] dir
+            void $ doVimSearch Nothing [] dir
         Nothing -> printMsg "No previous search pattern"
 
 repeatGotoCharE :: (Direction -> Direction) -> EditorM ()
@@ -334,8 +338,8 @@ repeatGotoCharE mutateDir = do
 
 enableVisualE :: RegionStyle -> EditorM ()
 enableVisualE style = withBuffer0 $ do
-    putA regionStyleA style
-    putA rectangleSelectionA $ Block == style
+    assign regionStyleA style
+    assign rectangleSelectionA $ Block == style
     setVisibleSelection True
     pointB >>= setSelectionMarkPointB
 

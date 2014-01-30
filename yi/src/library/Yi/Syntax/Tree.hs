@@ -1,4 +1,10 @@
-{-# LANGUAGE CPP, TypeFamilies, NoMonomorphismRestriction, FlexibleInstances, ScopedTypeVariables #-}
+{-# LANGUAGE
+  CPP,
+  TypeFamilies,
+  NoMonomorphismRestriction,
+  DeriveFoldable,
+  FlexibleInstances,
+  ScopedTypeVariables #-}
 {-# OPTIONS_GHC -fno-warn-unused-binds -fno-warn-incomplete-patterns #-} -- the CPP seems to confuse GHC; we have uniplate patterns
 {- Copyright JP Bernardy 2008 -}
 
@@ -11,26 +17,26 @@ module Yi.Syntax.Tree (IsTree(..), toksAfter, allToks, tokAtOrBefore, toksInRegi
                        getAllSubTrees,
                        tokenBasedAnnots, tokenBasedStrokes,
                        subtreeRegion,
-                       fromLeafToLeafAfter, fromNodeToFinal) 
+                       fromLeafToLeafAfter, fromNodeToFinal)
   where
 
 -- Some of this might be replaced by a generic package
 -- such as multirec, uniplace, emgm, ...
 
-import Prelude (curry)
-
+import Prelude hiding (concatMap, error)
+import Control.Applicative
 import Control.Arrow (first)
-import Data.List (dropWhile, takeWhile, reverse, filter, zip, take, drop, length, splitAt)
 import Data.Maybe
-import Data.Monoid (First(..), Last(..), getFirst, getLast, mempty)
+import Data.Monoid (First(..), Last(..), getFirst, getLast)
+import Data.Foldable
 #ifdef TESTING
 import Test.QuickCheck
 #endif
 
 import Yi.Buffer.Basic
 import Yi.Lexer.Alex
-import Yi.Prelude
 import Yi.Region
+import Yi.Debug
 
 -- Fundamental types
 type Path = [Int]
@@ -74,13 +80,11 @@ pruneNodesBefore p (x:xs) t = rebuild (left' ++ pruneNodesBefore p xs c : rights
 -- | Given an approximate path to a leaf at the end of the region, return:
 -- (path to leaf at the end of the region,path from focused node to the leaf, small node encompassing the region)
 fromNodeToFinal :: IsTree tree => Region -> Node (tree (Tok a)) -> Node (tree (Tok a))
-fromNodeToFinal r (xs,root) = 
+fromNodeToFinal r (xs,root) =
     trace ("r = " ++ show r) $
     trace ("focused ~ " ++ show (subtreeRegion focused) ) $
     trace ("pathFromFocusedToLeaf = " ++ show focusedToLeaf) $
-    trace ("pruned ~ " ++ show (subtreeRegion focused) ) $
-
-    (xs', pruned)
+    trace ("pruned ~ " ++ show (subtreeRegion focused)) (xs', pruned)
 
     where n@(xs',_) = fromLeafToLeafAfter (regionEnd r) (xs,root)
           (_,(focusedToLeaf,focused)) = fromLeafAfterToFinal p0 n
@@ -102,28 +106,27 @@ lastThat p (x:xs) = if p x then work x xs else x
     where work x0 [] = x0
           work x0 (y:ys) = if p y then work y ys else x0
 
--- | Given a path to a node, return a path+node which 
+-- | Given a path to a node, return a path+node which
 -- node that encompasses the given node + a point before it.
 fromLeafAfterToFinal :: IsTree tree => Point -> Node (tree (Tok a)) -> (Path, Node (tree (Tok a)))
-fromLeafAfterToFinal p n = 
-    -- trace ("reg = " ++ show (fmap (subtreeRegion . snd) nsPth)) $ 
+fromLeafAfterToFinal p n =
+    -- trace ("reg = " ++ show (fmap (subtreeRegion . snd) nsPth)) $
       firstThat (\(_,(_,s)) -> getFirstOffset s <= p) ns
-    where ns = (reverse (nodesOnPath n))
+    where ns = reverse (nodesOnPath n)
 
 -- | Search the tree in pre-order starting at a given node, until finding a leaf which is at
 -- or after the given point. An effort is also made to return a leaf as close as possible to @p@.
 -- TODO: rename to fromLeafToLeafAt
 fromLeafToLeafAfter :: IsTree tree => Point -> Node (tree (Tok a)) -> Node (tree (Tok a))
-fromLeafToLeafAfter p (xs,root) = 
+fromLeafToLeafAfter p (xs,root) =
     trace "fromLeafToLeafAfter:" $
     trace ("xs = " ++ show xs) $
     trace ("xsValid = " ++ show xsValid) $
     trace ("p = " ++ show p) $
     trace ("leafBeforeP = " ++ show leafBeforeP) $
     trace ("leaf ~ " ++ show (subtreeRegion leaf)) $
-    trace ("xs' = " ++ show xs') $
-    result
-    where xs' = if null candidateLeaves 
+    trace ("xs' = " ++ show xs') result
+    where xs' = if null candidateLeaves
                       then []
                       else fst $ firstOrLastThat (\(_,s) -> getFirstOffset s >= p) candidateLeaves
           candidateLeaves = allLeavesRelative relChild n
@@ -135,15 +138,15 @@ fromLeafToLeafAfter p (xs,root) =
           result = (xs',root)
 
 allLeavesRelative :: IsTree tree => (Int -> [(Int, tree a)] -> [(Int, tree a)]) -> Node (tree a) -> [Node (tree a)]
-allLeavesRelative select 
+allLeavesRelative select
    = filter (not . nullSubtree . snd) . allLeavesRelative' select . reverse . nodesAndChildIndex
      -- we remove empty subtrees because their region is [0,0].
 
 -- | Takes a list of (node, index of already inspected child), and return all leaves
 -- in this node after the said child).
 allLeavesRelative' :: IsTree tree => (Int -> [(Int, tree a)] -> [(Int, tree a)]) -> [(Node (tree a), Int)] -> [Node (tree a)]
-allLeavesRelative' select l 
-  = [(xs ++ xs', t') | ((xs,t),c) <- l, (xs',t') <- allLeavesRelativeChild select c t] 
+allLeavesRelative' select l
+  = [(xs ++ xs', t') | ((xs,t),c) <- l, (xs',t') <- allLeavesRelativeChild select c t]
 
 -- | Given a root, return all the nodes encountered along it, their
 -- paths, and the index of the child which comes next.
@@ -152,7 +155,7 @@ nodesAndChildIndex ([],t) = [(([],t),negate 1)]
 nodesAndChildIndex (x:xs, t) = case index x (subtrees t) of
     Just c' -> (([],t), x) : fmap (first $ first (x:)) (nodesAndChildIndex (xs,c'))
     Nothing -> [(([],t),negate 1)]
-          
+
 nodesOnPath :: IsTree tree => Node (tree a) -> [(Path, Node (tree a))]
 nodesOnPath ([],t) = [([],([],t))]
 nodesOnPath (x:xs,t) = ([],(x:xs,t)) : case index x (subtrees t) of
@@ -169,11 +172,11 @@ afterChild c = drop (c+1)
 
 -- Return all leaves after or before child depending on the relation which is given.
 allLeavesRelativeChild :: IsTree tree => (Int -> [(Int, tree a)] -> [(Int, tree a)]) -> Int -> tree a -> [Node (tree a)]
-allLeavesRelativeChild select c t 
+allLeavesRelativeChild select c t
     | null ts = [([], t)]
     | otherwise = [(x:xs,t') | (x,ct) <- select c (zip [0..] ts),
                    (xs, t') <- allLeavesIn select ct]
-   where ts = subtrees t                      
+   where ts = subtrees t
 
 
 -- | Return all leaves (with paths) inside a given root.
@@ -186,7 +189,7 @@ getAllPaths :: IsTree tree => tree t -> [[tree t]]
 getAllPaths t = fmap (++[t]) ([] : concatMap getAllPaths (subtrees t))
 
 goDown :: IsTree tree => Int -> tree t -> Maybe (tree t)
-goDown i = index i . subtrees 
+goDown i = index i . subtrees
 
 index :: Int -> [a] -> Maybe a
 index _ [] = Nothing
@@ -210,7 +213,7 @@ getLastPath roots offset =
     case takeWhile ((< offset) . posnOfs . snd) allSubPathPosn of
       [] -> Nothing
       xs -> Just $ fst $ last xs
-    where allSubPathPosn = [(p,posn) | root <- roots, p@(t':_) <- getAllPaths root, 
+    where allSubPathPosn = [(p,posn) | root <- roots, p@(t':_) <- getAllPaths root,
                             Just tok <- [getFirstElement t'], let posn = tokPosn tok]
 
 -- | Return all subtrees in a tree, in preorder.
@@ -238,11 +241,11 @@ getFirstOffset = maybe 0 tokBegin . getFirstTok
 getLastOffset = maybe 0 tokEnd . getLastTok
 
 subtreeRegion :: Foldable t => t (Tok t1) -> Region
-subtreeRegion t = mkRegion (getFirstOffset t) (getLastOffset t) 
+subtreeRegion t = mkRegion (getFirstOffset t) (getLastOffset t)
 
 -- | Given a tree, return (first offset, number of lines).
 getSubtreeSpan :: (Foldable tree) => tree (Tok t) -> (Point, Int)
-getSubtreeSpan tree = (posnOfs $ firstOff, lastLine - firstLine)
+getSubtreeSpan tree = (posnOfs firstOff, lastLine - firstLine)
     where bounds@[firstOff, _last] = fmap (tokPosn . assertJust) [getFirstElement tree, getLastElement tree]
           [firstLine, lastLine] = fmap posnLine bounds
           assertJust (Just x) = x
@@ -267,12 +270,7 @@ nodeRegion :: IsTree tree => Node (tree (Tok a)) -> Region
 nodeRegion n = subtreeRegion t
     where Just t = walkDown n
 
-data Test a = Empty | Leaf a | Bin (Test a) (Test a) deriving (Show, Eq)
-
-instance Foldable Test where
-    foldMap _ Empty = mempty
-    foldMap f (Leaf x) = f x
-    foldMap f (Bin _ r) = foldMap f r <> foldMap f r
+data Test a = Empty | Leaf a | Bin (Test a) (Test a) deriving (Show, Eq, Foldable)
 
 instance IsTree Test where
     uniplate (Bin l r) = ([l,r],\[l',r'] -> Bin l' r')
@@ -300,7 +298,7 @@ arbitraryFromList xs = do
 
 instance Eq (Tok a) where
     x == y = tokPosn x == tokPosn y
-    
+
 instance Arbitrary Region where
     arbitrary = sized $ \size -> do
         x0 :: Int <- arbitrary
@@ -339,12 +337,12 @@ prop_fromLeafAfterToFinal (N n) = let
    let final@(_, (_, finalSubtree)) = fromLeafAfterToFinal p n
        finalRegion = subtreeRegion finalSubtree
        initialRegion = nodeRegion n
-       
+
    whenFail (do putStrLn $ "final = " ++ show final
                 putStrLn $ "final reg = " ++ show finalRegion
                 putStrLn $ "initialReg = " ++ show initialRegion
                 putStrLn $ "p = " ++ show p
-            ) 
+            )
      ((regionStart finalRegion <= p) && (initialRegion `includedRegion` finalRegion))
 
 prop_allLeavesAfter :: NTTT -> Property
@@ -373,7 +371,7 @@ prop_fromNodeToLeafAfter (N n) = forAll (pointInside (subtreeRegion $ snd n)) $ 
        afterRegion = nodeRegion after
    whenFail (do putStrLn $ "after = " ++ show after
                 putStrLn $ "after reg = " ++ show afterRegion
-            ) 
+            )
      (regionStart afterRegion >= p)
 
 prop_fromNodeToFinal :: NTTT -> Property

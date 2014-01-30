@@ -45,29 +45,30 @@ module Yi.Buffer.Implementation
 )
 where
 
-import Control.Monad
+import Control.Applicative
 import Data.Array
 import Data.Binary
 import Data.DeriveTH
-import Data.List (groupBy, zip, takeWhile)
-import Data.Maybe 
+import Data.List (groupBy)
+import Data.Maybe
 import Data.Monoid
 import Data.Typeable
-import Prelude (dropWhile, map, filter)
+import Data.Function
 import Yi.Buffer.Basic
-import Yi.Prelude
 import Yi.Regex
 import Yi.Region
 import Yi.Style
-import Yi.Syntax 
+import Yi.Syntax
+import Yi.Utils
 import qualified Data.Rope as F
+import Data.Rope (Rope)
 import qualified Data.Map as M
 import qualified Data.Set as Set
 
 data MarkValue = MarkValue {markPoint :: !Point, markGravity :: !Direction}
                deriving (Ord, Eq, Show, Typeable)
 
-$(derive makeBinary ''MarkValue) 
+$(derive makeBinary ''MarkValue)
 
 type Marks = M.Map Mark MarkValue
 
@@ -86,7 +87,7 @@ instance Eq Overlay where
     Overlay a b c _ == Overlay a' b' c' _ = a == a' && b == b' && c == c'
 
 instance Ord Overlay where
-    compare (Overlay a b c _) (Overlay a' b' c' _) 
+    compare (Overlay a b c _) (Overlay a' b' c' _)
         = compare a a' `mappend` compare b b' `mappend` compare c c'
 
 
@@ -96,21 +97,21 @@ data BufferImpl syntax =
                     , markNames  :: !(M.Map String Mark)
                     , hlCache    :: !(HLState syntax)       -- ^ syntax highlighting state
                     , overlays   :: !(Set.Set Overlay) -- ^ set of (non overlapping) visual overlay regions
-                    , dirtyOffset :: !Point -- ^ Lowest modified offset since last recomputation of syntax 
+                    , dirtyOffset :: !Point -- ^ Lowest modified offset since last recomputation of syntax
                     }
         deriving Typeable
 
 
 dummyHlState :: HLState syntax
-dummyHlState = (HLState noHighlighter (hlStartState noHighlighter))
+dummyHlState = HLState noHighlighter (hlStartState noHighlighter)
 
 -- Atm we can't store overlays because stylenames are functions (can't be serialized)
 -- TODO: ideally I'd like to get rid of overlays entirely; although we could imagine them storing mere styles.
 instance Binary (BufferImpl ()) where
     put b = put (mem b) >> put (marks b) >> put (markNames b)
     get = pure FBufferData <*> get <*> get <*> get <*> pure dummyHlState <*> pure Set.empty <*> pure 0
-    
-    
+
+
 
 -- | Mutation actions (also used the undo or redo list)
 --
@@ -120,7 +121,7 @@ instance Binary (BufferImpl ()) where
 -- Note that the update direction is only a hint for moving the cursor
 -- (mainly for undo purposes); the insertions and deletions are always
 -- applied Forward.
-data Update = Insert {updatePoint :: !Point, updateDirection :: !Direction, insertUpdateString :: !Rope} 
+data Update = Insert {updatePoint :: !Point, updateDirection :: !Direction, insertUpdateString :: !Rope}
             | Delete {updatePoint :: !Point, updateDirection :: !Direction, deleteUpdateString :: !Rope}
               -- Note that keeping the text does not cost much: we keep the updates in the undo list;
               -- if it's a "Delete" it means we have just inserted the text in the buffer, so the update shares
@@ -154,7 +155,7 @@ newBI s = FBufferData s M.empty M.empty dummyHlState Set.empty 0
 
 -- | read @n@ bytes from buffer @b@, starting at @i@
 readChunk :: Rope -> Size -> Point -> Rope
-readChunk p (Size n) (Point i) = F.take n $ F.drop i $ p
+readChunk p (Size n) (Point i) = F.take n $ F.drop i p
 
 -- | Write string into buffer.
 insertChars :: Rope -> Rope -> Point -> Rope
@@ -183,7 +184,7 @@ shiftMarkValue from by (MarkValue p gravity) = MarkValue shifted gravity
                                   Forward -> p'
                   | otherwise {- p > from -} = p'
               where p' = max from (p +~ by)
-              
+
 mapOvlMarks :: (MarkValue -> MarkValue) -> Overlay -> Overlay
 mapOvlMarks f (Overlay l s e v) = Overlay l (f s) (f e) v
 
@@ -199,12 +200,12 @@ nelemsBI :: Int -> Point -> BufferImpl syntax -> String
 nelemsBI n i fb = F.toString $ readChunk (mem fb) (Size n) i
 
 getStream :: Direction -> Point -> BufferImpl syntax -> Rope
-getStream Forward  (Point i) fb =             F.drop i $ mem $ fb
-getStream Backward (Point i) fb = F.reverse $ F.take i $ mem $ fb
+getStream Forward  (Point i) fb =             F.drop i $ mem fb
+getStream Backward (Point i) fb = F.reverse $ F.take i $ mem fb
 
 getIndexedStream :: Direction -> Point -> BufferImpl syntax -> [(Point,Char)]
-getIndexedStream Forward  (Point p) fb = zip [Point p..]           $ F.toString        $ F.drop p $ mem $ fb
-getIndexedStream Backward (Point p) fb = zip (dF (pred (Point p))) $ F.toReverseString $ F.take p $ mem $ fb
+getIndexedStream Forward  (Point p) fb = zip [Point p..]           $ F.toString        $ F.drop p $ mem fb
+getIndexedStream Backward (Point p) fb = zip (dF (pred (Point p))) $ F.toReverseString $ F.take p $ mem fb
     where dF n = n : dF (pred n)
 
 -- | Create an "overlay" for the style @sty@ between points @s@ and @e@
@@ -234,7 +235,7 @@ delOverlayLayer layer fb = fb{overlays = Set.filter ((/= layer) . overlayLayer) 
 --   the buffer.  In each list, the strokes are guaranteed to be
 --   ordered and non-overlapping.  The lists of strokes are ordered by
 --   decreasing priority: the 1st layer should be "painted" on top.
-strokesRangesBI :: (Point -> Point -> Point -> [Stroke]) -> 
+strokesRangesBI :: (Point -> Point -> Point -> [Stroke]) ->
   Maybe SearchExp -> Region -> Point -> BufferImpl syntax -> [[Stroke]]
 strokesRangesBI getStrokes regex rgn  point fb = result
   where
@@ -243,13 +244,13 @@ strokesRangesBI getStrokes regex rgn  point fb = result
     dropBefore = dropWhile (\s ->spanEnd s <= i)
     takeIn  = takeWhile (\s -> spanBegin s <= j)
 
-    groundLayer = [(Span i mempty j)]
+    groundLayer = [Span i mempty j]
 
     -- zero-length spans seem to break stroking in general, so filter them out!
     syntaxHlLayer = filter (\(Span b _m a) -> b /= a)  $ getStrokes point i j
 
     layers2 = map (map overlayStroke) $ groupBy ((==) `on` overlayLayer) $  Set.toList $ overlays fb
-    layer3 = case regex of 
+    layer3 = case regex of
                Just re -> takeIn $ map hintStroke $ regexRegionBI re (mkRegion i j) fb
                Nothing -> []
     result = map (map clampStroke . takeIn . dropBefore) (layer3 : layers2 ++ [syntaxHlLayer, groundLayer])
@@ -270,7 +271,7 @@ isValidUpdate u b = case u of
 
 -- | Apply a /valid/ update
 applyUpdateI :: Update -> BufferImpl syntax -> BufferImpl syntax
-applyUpdateI u fb = touchSyntax (updatePoint u) $ 
+applyUpdateI u fb = touchSyntax (updatePoint u) $
                     fb {mem = p', marks = M.map shift (marks fb),
                                    overlays = Set.map (mapOvlMarks shift) (overlays fb)}
                                    -- FIXME: this is inefficient; find a way to use mapMonotonic
@@ -282,7 +283,7 @@ applyUpdateI u fb = touchSyntax (updatePoint u) $
           shift = shiftMarkValue (updatePoint u) amount
           p = mem fb
           -- FIXME: remove collapsed overlays
-   
+
 -- | Reverse the given update
 reverseUpdateI :: Update -> Update
 reverseUpdateI (Delete p dir cs) = Insert p (reverseDir dir) cs
@@ -294,7 +295,7 @@ reverseUpdateI (Insert p dir cs) = Delete p (reverseDir dir) cs
 
 -- | Line at the given point. (Lines are indexed from 1)
 lineAt :: Point -> BufferImpl syntax -> Int
-lineAt (Point point) fb = 1 + (F.countNewLines $ F.take point (mem fb))
+lineAt (Point point) fb = 1 + F.countNewLines (F.take point (mem fb))
 
 -- | Point that starts the given line (Lines are indexed from 1)
 solPoint :: Int -> BufferImpl syntax -> Point
@@ -316,7 +317,7 @@ regexRegionBI se r fb = case dir of
      Backward -> fmap (fmapRegion subPoint . matchedRegion) $ matchAll' $ F.toReverseString bufReg
     where matchedRegion arr = let (off,len) = arr!0 in mkRegion (Point off) (Point (off+len))
           addPoint (Point x) = Point (p + x)
-          subPoint (Point x) = Point (q - x) 
+          subPoint (Point x) = Point (q - x)
           matchAll' = matchAll (searchRegex dir se)
           dir = regionDirection r
           Point p = regionStart r
@@ -353,7 +354,7 @@ touchSyntax ::  Point -> BufferImpl syntax -> BufferImpl syntax
 touchSyntax touchedIndex fb = fb { dirtyOffset = min touchedIndex (dirtyOffset fb)}
 
 updateSyntax :: BufferImpl syntax -> BufferImpl syntax
-updateSyntax fb@FBufferData {dirtyOffset = touchedIndex, hlCache = HLState hl cache} 
+updateSyntax fb@FBufferData {dirtyOffset = touchedIndex, hlCache = HLState hl cache}
     | touchedIndex == maxBound = fb
     | otherwise
     = fb {dirtyOffset = maxBound,
@@ -361,7 +362,7 @@ updateSyntax fb@FBufferData {dirtyOffset = touchedIndex, hlCache = HLState hl ca
          }
     where getText = Scanner 0 id (error "getText: no character beyond eof")
                      (\idx -> getIndexedStream Forward idx fb)
-                                        
+
 ------------------------------------------------------------------------
 
 -- | Returns the requested mark, creating a new mark with that name (at the supplied position) if needed

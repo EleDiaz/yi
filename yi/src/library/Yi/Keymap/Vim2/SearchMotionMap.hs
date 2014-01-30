@@ -2,11 +2,7 @@ module Yi.Keymap.Vim2.SearchMotionMap
     ( defSearchMotionMap
     ) where
 
-import Prelude ()
-import Yi.Prelude
-
-import Control.Monad (replicateM_)
-import Data.List (drop)
+import Control.Monad
 import Data.Maybe (fromMaybe)
 
 import Yi.Buffer
@@ -47,8 +43,7 @@ enterBinding = VimBindingE prereq action
 editBinding :: VimBinding
 editBinding = VimBindingE prereq action
     where prereq evs (VimState { vsMode = Search {}} ) = matchFromBool $
-            evs `elem` (fmap fst binds)
-            || (null (drop 1 evs))
+            evs `elem` fmap fst binds || null (drop 1 evs)
           prereq _ _ = NoMatch
           action evs = do
               fromMaybe (isearchAddE evs) (lookup evs binds)

@@ -1,7 +1,7 @@
 {-# LANGUAGE FlexibleContexts, TemplateHaskell, RecordWildCards #-}
 {-# OPTIONS_GHC -fno-warn-incomplete-patterns #-} -- uniplate uses incomplete patterns
 -- Copyright (c) Jean-Philippe Bernardy 2008
-module Yi.Regex 
+module Yi.Regex
   (
    SearchOption(..), makeSearchOptsM,
    SearchExp(..), searchString, searchRegex, emptySearch,
@@ -61,10 +61,10 @@ makeSearchOptsM opts re = (\p->SearchExp { seInput        = re
                                          , seBackCompiled = compile $ reversePattern p
                                          , seOptions      = opts
                                          }) <$> pattern
-    where searchOpts = foldr (.) id . map searchOpt
+    where searchOpts = foldr ((.) . searchOpt) id
           compile source = patternToRegex source (searchOpts opts defaultCompOpt) defaultExecOpt
-          pattern = if QuoteRegex `elem` opts 
-                          then Right (literalPattern re) 
+          pattern = if QuoteRegex `elem` opts
+                          then Right (literalPattern re)
                           else mapLeft show (parseRegex re)
 
 instance Binary SearchExp where
@@ -94,7 +94,7 @@ literalPattern' = PConcat . map (PChar (DoPa 0))
 
 -- | Reverse a pattern. Note that the submatches will be reversed as well.
 reversePattern :: (Pattern, (t, DoPa)) -> (Pattern, (t, DoPa))
-reversePattern (pattern,(gi,DoPa maxDoPa)) = (transform (rev) pattern, (gi,DoPa maxDoPa))
+reversePattern (pattern,(gi,DoPa maxDoPa)) = (transform rev pattern, (gi,DoPa maxDoPa))
     where rev (PConcat l) = PConcat (reverse l)
           rev (PCarat  x) = PDollar x
           rev (PDollar x) = PCarat  x
@@ -107,37 +107,36 @@ Chris K Commentary:
 
 I have one DIRE WARNING and one suggestion.
 
-The DIRE WARNING is against using the reversed Pattern to find captured subexpressions.  
-It will work perfectly to find the longest match but give nonsense for captures.  In 
-particular matching text "abc" with "(.)*" forward returns the 1st capture as "c".  
+The DIRE WARNING is against using the reversed Pattern to find captured subexpressions.
+It will work perfectly to find the longest match but give nonsense for captures.  In
+particular matching text "abc" with "(.)*" forward returns the 1st capture as "c".
 Searching "cba" with the reverse of "(.)*", which is identical, returns the 1st capture as "a".
 
-Enough changes to the matching engine could allow for the reversed search on the 
-reversed text to return the same captures as the the forward search on the forward 
-text.  Rather than that tricky complexity, if you need the substring captures you 
-can use the reversed pattern to find a whole match and then run the forward pattern 
+Enough changes to the matching engine could allow for the reversed search on the
+reversed text to return the same captures as the the forward search on the forward
+text.  Rather than that tricky complexity, if you need the substring captures you
+can use the reversed pattern to find a whole match and then run the forward pattern
 on that substring.
 
 The one suggestion is that the DoPa are irrelevant to the matching — they are there to
 allow a person to understand how the output of each stage of the regex-tdfa code relates
-to the input pattern.  
+to the input pattern.
 
 -}
 
 -- Cannot use Derive because we have to handle list arguments specially (POr, PConcat)
 instance Uniplate Pattern where
-    uniplate = \pat -> 
-      case pat of
-          PGroup x p -> ([p], \[z] ->PGroup x z)
-          POr ps -> (ps, POr)
-          PConcat ps -> (ps, PConcat)
-          PQuest p ->([p], \[z] -> PQuest z)
-          PPlus p ->([p], \[z] -> PPlus z)
-          PStar x p -> ([p], \[z] ->PStar x z)
-          PBound w x p -> ([p], \[z] ->PBound w x z)
-          PNonCapture p ->([p], \[z] -> PNonCapture z)
-          PNonEmpty p ->([p], \[z] -> PNonEmpty z)
-          p ->([],\[]->p)
+    uniplate pat = case pat of
+        PGroup x p -> ([p], \[z] ->PGroup x z)
+        POr ps -> (ps, POr)
+        PConcat ps -> (ps, PConcat)
+        PQuest p ->([p], \[z] -> PQuest z)
+        PPlus p ->([p], \[z] -> PPlus z)
+        PStar x p -> ([p], \[z] ->PStar x z)
+        PBound w x p -> ([p], \[z] ->PBound w x z)
+        PNonCapture p ->([p], \[z] -> PNonCapture z)
+        PNonEmpty p ->([p], \[z] -> PNonEmpty z)
+        p ->([],\[]->p)
 
 emptySearch :: SearchExp
 emptySearch = SearchExp "" emptyRegex emptyRegex []

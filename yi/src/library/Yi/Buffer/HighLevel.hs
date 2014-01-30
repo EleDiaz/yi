@@ -1,19 +1,17 @@
-{-# LANGUAGE DeriveDataTypeable #-}
 -- Copyright (C) 2008 JP Bernardy
 module Yi.Buffer.HighLevel where
 
-import Prelude (FilePath)
-import Yi.Prelude
-
 import Control.Monad.RWS.Strict (ask)
 import Control.Monad.State hiding (forM, forM_, sequence_)
+import Control.Applicative
+import Control.Monad
+import Control.Lens hiding (moveTo, (-~), (+~), re, transform)
 
 import Data.Char
-import Data.List (isPrefixOf, sort, lines, drop, filter, length,
-                  takeWhile, dropWhile, reverse, map, intersperse, zip)
+import Data.List (isPrefixOf, sort, intersperse)
 import Data.Maybe (fromMaybe, listToMaybe, catMaybes)
-import Data.Ord
 import qualified Data.Rope as R
+import Data.Rope (Rope)
 import Data.Time (UTCTime)
 import Data.Tuple (swap)
 
@@ -21,9 +19,11 @@ import Yi.Buffer.Basic
 import Yi.Buffer.Misc
 import Yi.Buffer.Normal
 import Yi.Buffer.Region
+import {-# SOURCE #-} Yi.Keymap (YiM, withBuffer)
 import Yi.String
 import Yi.Window
 import Yi.Config.Misc (ScrollStyle(SingleLine))
+import Yi.Utils
 
 -- ---------------------------------------------------------------------
 -- Movement operations
@@ -55,11 +55,11 @@ leftOnEol = savingPrefCol $ do
 
 -- | Move @x@ chars back, or to the sol, whichever is less
 moveXorSol :: Int -> BufferM ()
-moveXorSol x = replicateM_ x $ do c <- atSol; when (not c) leftB
+moveXorSol x = replicateM_ x $ do c <- atSol; unless c leftB
 
 -- | Move @x@ chars forward, or to the eol, whichever is less
 moveXorEol :: Int -> BufferM ()
-moveXorEol x = replicateM_ x $ do c <- atEol; when (not c) rightB
+moveXorEol x = replicateM_ x $ do c <- atEol; unless c rightB
 
 -- | Move to first char of next word forwards
 nextWordB :: BufferM ()
@@ -124,7 +124,7 @@ lastNonSpaceB = do moveToEol
 -- if already there, then go to the beginning of the line.
 moveNonspaceOrSol :: BufferM ()
 moveNonspaceOrSol = do prev <- readPreviousOfLnB
-                       if and . map isSpace $ prev then moveToSol else firstNonSpaceB
+                       if all isSpace prev then moveToSol else firstNonSpaceB
 
 -- | True if current line consists of just a newline (no whitespace)
 isCurrentLineEmptyB :: BufferM Bool
@@ -221,7 +221,7 @@ readPreviousOfLnB :: BufferM String
 readPreviousOfLnB = readRegionB =<< regionOfPartB Line Backward
 
 hasWhiteSpaceBefore :: BufferM Bool
-hasWhiteSpaceBefore = prevPointB >>= readAtB >>= return . isSpace
+hasWhiteSpaceBefore = liftM isSpace (prevPointB >>= readAtB)
 
 -- | Get the previous point, unless at the beginning of the file
 prevPointB :: BufferM Point
@@ -395,7 +395,7 @@ scrollByB f n = do h <- askWindow height
 -- | Same as scrollB, but also moves the cursor
 vimScrollB :: Int -> BufferM ()
 vimScrollB n = do scrollB n
-                  discard $ lineMoveRel n
+                  void $ lineMoveRel n
 
 -- | Same as scrollByB, but also moves the cursor
 vimScrollByB :: (Int -> Int) -> Int -> BufferM ()
@@ -430,20 +430,20 @@ scrollB n = do
   MarkSet fr _ _ <- askMarks
   savingPointB $ do
     moveTo =<< getMarkPointB fr
-    discard $ gotoLnFrom n
+    void $ gotoLnFrom n
     setMarkPointB fr =<< pointB
   w <- askWindow wkey
-  modA pointFollowsWindowA (\old w' -> if w == w' then True else old w')
+  (%=) pointFollowsWindowA (\old w' -> ((w == w') || old w'))
 
 -- | Move the point to inside the viewable region
 snapInsB :: BufferM ()
 snapInsB = do
-    movePoint <- getA pointFollowsWindowA
+    movePoint <- use pointFollowsWindowA
     w <- askWindow wkey
     when (movePoint w) $ do
         r <- winRegionB
         p <- pointB
-        moveTo $ max (regionStart r) $ min (regionEnd r) $ p
+        moveTo $ max (regionStart r) $ min (regionEnd r) p
 
 -- | return index of Sol on line @n@ above current line
 indexOfSolAbove :: Int -> BufferM Point
@@ -464,7 +464,7 @@ pointScreenRelPosition _ _ _ = Within -- just to disable the non-exhaustive patt
 -- | Move the visible region to include the point
 snapScreenB :: Maybe ScrollStyle ->BufferM Bool
 snapScreenB style = do
-    movePoint <- getA pointFollowsWindowA
+    movePoint <- use pointFollowsWindowA
     w <- askWindow wkey
     if movePoint w then return False else do
         inWin <- pointInWindowB =<< pointB
@@ -509,7 +509,7 @@ middleB = do
 pointInWindowB :: Point -> BufferM Bool
 pointInWindowB p = nearRegion p <$> winRegionB
 --  do w <- winRegionB;  trace ("pointInWindowB " ++ show w ++ " p = " ++ show p)
-          
+
 -----------------------------
 -- Region-related operations
 
@@ -523,7 +523,7 @@ getRawestSelectRegionB = do
 -- | Return the empty region if the selection is not visible.
 getRawSelectRegionB :: BufferM Region
 getRawSelectRegionB = do
-  s <- getA highlightSelectionA
+  s <- use highlightSelectionA
   if s then getRawestSelectRegionB else do
      p <- pointB
      return $ mkRegion p p
@@ -531,7 +531,7 @@ getRawSelectRegionB = do
 -- | Get the current region boundaries. Extended to the current selection unit.
 getSelectRegionB :: BufferM Region
 getSelectRegionB = do
-  regionStyle <- getA regionStyleA
+  regionStyle <- use regionStyleA
   r <- getRawSelectRegionB
   mkRegionOfStyleB (regionStart r) (regionEnd r) regionStyle
 
@@ -555,7 +555,7 @@ deleteBlankLinesB =
      when isThisBlank $ do
        p <- pointB
        -- go up to the 1st blank line in the group
-       discard $ whileB (isBlank <$> getNextLineB Backward) lineUp
+       void $ whileB (isBlank <$> getNextLineB Backward) lineUp
        q <- pointB
        -- delete the whole blank region.
        deleteRegionB $ mkRegion p q
@@ -634,14 +634,14 @@ unLineCommentSelectionB s1 s2 =
   where
   unCommentLine :: String -> String
   unCommentLine line
-    | isPrefixOf s1 line = drop (length s1) line
-    | isPrefixOf s2 line = drop (length s2) line
-    | otherwise         = line
+    | s1 `isPrefixOf` line = drop (length s1) line
+    | s2 `isPrefixOf` line = drop (length s2) line
+    | otherwise            = line
 
 -- | Toggle line comments in the selection by adding or removing a prefix to each
 -- line.
-toggleCommentSelectionB :: String -> String -> BufferM ()
-toggleCommentSelectionB insPrefix delPrefix = do
+toggleCommentSelectionB :: String -> String -> YiM ()
+toggleCommentSelectionB insPrefix delPrefix = withBuffer $ do
   l <- readUnitB Line
   if delPrefix `isPrefixOf` l
     then unLineCommentSelectionB insPrefix delPrefix
@@ -727,7 +727,7 @@ shapeOfBlockRegionB reg = savingPointB $ do
     (l1, c1) <- getLineAndColOfPoint $ regionEnd reg
     let (left, top, bottom, right) = (min c0 c1, min l0 l1, max l0 l1, max c0 c1)
     lengths <- forM [top .. bottom] $ \l -> do
-        discard $ gotoLn l
+        void $ gotoLn l
         moveToColB left
         currentLeft <- curCol
         if currentLeft /= left
@@ -749,12 +749,10 @@ leftEdgesOfRegionB Block reg = savingPointB $ do
     (l1, _) <- getLineAndColOfPoint $ regionEnd reg
     moveTo $ regionStart reg
     fmap catMaybes $ forM [0 .. abs (l0 - l1)] $ \i -> savingPointB $ do
-        discard $ lineMoveRel i
+        void $ lineMoveRel i
         p <- pointB
         eol <- atEol
-        if not eol
-        then return $ Just p
-        else return Nothing
+        return (if not eol then Just p else Nothing)
 leftEdgesOfRegionB _ r = return [regionStart r]
 
 rightEdgesOfRegionB :: RegionStyle -> Region -> BufferM [Point]
@@ -770,7 +768,7 @@ rightEdgesOfRegionB LineWise reg = savingPointB $ do
                        if edge > lastEol
                        then return $ reverse acc
                        else do
-                           discard $ lineMoveRel 1
+                           void $ lineMoveRel 1
                            go (edge:acc) =<< pointB
     go [] (regionStart reg)
 rightEdgesOfRegionB _ reg = savingPointB $ do
@@ -788,7 +786,7 @@ splitBlockRegionToContiguousSubRegionsB reg = savingPointB $ do
         p1 <- pointB
         let subRegion = mkRegion p0 p1
         moveTo p0
-        discard $ lineMoveRel 1
+        void $ lineMoveRel 1
         return subRegion
 
 deleteRegionWithStyleB :: Region -> RegionStyle -> BufferM Point
@@ -816,7 +814,7 @@ readRegionRopeWithStyleB reg Block = savingPointB $ do
         else do
             p <- pointB
             r <- readRegionB' $ mkRegion p (p +~ Size l)
-            discard $ lineMoveRel 1
+            void $ lineMoveRel 1
             return r
     return $ R.concat $ intersperse (R.fromString "\n") chunks
 readRegionRopeWithStyleB reg style = readRegionB' =<< convertRegionToStyleB reg style
@@ -832,7 +830,7 @@ insertRopeWithStyleB rope Block = savingPointB $ do
                 moveToEol
                 newlineB
                 insertN $ replicate col ' '
-            else discard $ lineMoveRel 1
+            else void $ lineMoveRel 1
     sequence_ $ intersperse advanceLine $ fmap (savingPointB . insertN') ls
 insertRopeWithStyleB rope LineWise = do
     moveToSol
@@ -878,7 +876,7 @@ movePercentageFileB i = do
                  | x < 0.0 -> 0.0 -- Impossible?
                  | otherwise -> x
     lineCount <- lineCountB
-    discard $ gotoLn $ floor (fromIntegral lineCount * f)
+    void $ gotoLn $ floor (fromIntegral lineCount * f)
     firstNonSpaceB
 
 findMatchingPairB :: BufferM ()

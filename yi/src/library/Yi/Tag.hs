@@ -18,17 +18,14 @@ module Yi.Tag
   )
 where
 
-{- Standard Library Module Imports -}
-import Prelude (map, words, lines, readFile, reads)
-import Yi.Prelude
 import Yi.Editor
-import Yi.Dynamic 
+import Yi.Dynamic
 
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.UTF8 as BS8
 import Data.Maybe (mapMaybe)
 import Data.List (isPrefixOf)
-import System.FilePath (takeFileName, takeDirectory, FilePath, (</>))
+import System.FilePath (takeFileName, takeDirectory, (</>))
 import System.FriendlyPath
 import Data.Map (Map, fromList, lookup, keys)
 import Data.List.Split (splitOn)
@@ -36,14 +33,16 @@ import Data.List.Split (splitOn)
 import qualified Data.Trie as Trie
 import Data.Binary
 import Data.DeriveTH
+import Data.Default
+import Data.Typeable
 
 newtype Tags  = Tags (Maybe TagTable) deriving Typeable
-instance Initializable Tags where
-    initial = Tags Nothing
+instance Default Tags where
+    def = Tags Nothing
 
 newtype TagsFileList  = TagsFileList [FilePath] deriving Typeable
-instance Initializable TagsFileList where
-    initial = TagsFileList ["tags"]
+instance Default TagsFileList where
+    def = TagsFileList ["tags"]
 
 type Tag = String
 
@@ -64,7 +63,7 @@ data TagTable = TagTable { tagFileName :: FilePath
 lookupTag :: Tag -> TagTable -> Maybe (FilePath, Int)
 lookupTag tag tagTable = do
   (file, line) <- Data.Map.lookup tag $ tagFileMap tagTable
-  return $ (tagBaseDir tagTable </> file, line)
+  return (tagBaseDir tagTable </> file, line)
 
 -- | Super simple parsing CTag format 1 parsing algorithm
 -- TODO: support search patterns in addition to lineno
@@ -83,11 +82,11 @@ importTagTable filename = do
   friendlyName <-  expandTilda filename
   tagStr <- fmap BS8.toString $ BS.readFile friendlyName
   let ctags = readCTags tagStr
-  return $ TagTable { tagFileName = takeFileName filename,
-                      tagBaseDir  = takeDirectory filename,
-                      tagFileMap  = ctags,
-                      tagTrie     = Trie.fromList $ keys ctags
-                    }
+  return TagTable { tagFileName = takeFileName filename,
+                    tagBaseDir  = takeDirectory filename,
+                    tagFileMap  = ctags,
+                    tagTrie     = Trie.fromList $ keys ctags
+                  }
 
 -- | Gives all the possible expanded tags that could match a given @prefix@
 hintTags :: TagTable -> String -> [String]
@@ -95,7 +94,7 @@ hintTags tags prefix = map (prefix ++) $ Trie.possibleSuffixes prefix $ tagTrie 
 
 -- | Extends the string to the longest certain length
 completeTag :: TagTable -> String -> String
-completeTag tags prefix = prefix ++ (Trie.certainSuffix prefix $ tagTrie tags)
+completeTag tags prefix = prefix ++ Trie.certainSuffix prefix (tagTrie tags)
 
 
 -- ---------------------------------------------------------------------
@@ -111,17 +110,17 @@ resetTags = setDynamic $ Tags Nothing
 
 -- | Get the currently registered tag table
 getTags :: EditorM (Maybe TagTable)
-getTags = do 
+getTags = do
   Tags t <- getDynamic
   return t
 
 setTagsFileList :: String -> EditorM ()
-setTagsFileList fps = do 
-  resetTags 
+setTagsFileList fps = do
+  resetTags
   setDynamic $ TagsFileList (splitOn "," fps)
 
 getTagsFileList :: EditorM [FilePath]
-getTagsFileList = do 
+getTagsFileList = do
   TagsFileList fps <- getDynamic
   return fps
 
@@ -129,7 +128,7 @@ getTagsFileList = do
 $(derives [makeBinary] [''Tags, ''TagTable, ''TagsFileList])
 
 -- For GHC 7.0 with template-haskell 2.5 (at least on my computer - coconnor) the Binary instance
--- needs to be defined before the YiVariable instance. 
+-- needs to be defined before the YiVariable instance.
 --
 -- GHC 7.1 does not appear to have this issue.
 instance YiVariable Tags

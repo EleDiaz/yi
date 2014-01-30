@@ -5,12 +5,16 @@ module Yi.Mode.Abella
   , abellaEval, abellaEvalFromProofPoint, abellaUndo, abellaGet, abellaSend)
 where
 
-import Prelude ()
-import Control.Monad (replicateM_, join)
+import Control.Applicative
+import Control.Monad
+import Control.Lens hiding (moveTo)
 import Data.Char (isSpace)
 import Data.Binary
 import Data.Maybe (isJust)
 import Data.List (isInfixOf)
+import Data.Default
+import Data.Typeable
+import Data.Traversable (sequenceA)
 import Yi.Core
 import qualified Yi.Mode.Interactive as Interactive
 import Yi.Modes (TokenBasedMode, linearSyntaxMode, anyExtension)
@@ -27,16 +31,16 @@ abellaModeGen abellaBinding =
   , modeApplies = anyExtension ["thm"]
   , modeGetAnnotations = tokenBasedAnnots (sequenceA . tokToSpan . fmap Abella.tokenToText)
   , modeToggleCommentSelection = toggleCommentSelectionB "% " "%"
-  , modeKeymap = topKeymapA ^: ((<||)
+  , modeKeymap = topKeymapA %~ (<||)
      (choice
       [ abellaBinding 'p' ?*>>! sav abellaUndo
       , abellaBinding 'e' ?*>>! sav abellaEval
       , abellaBinding 'n' ?*>>! sav abellaNext
       , abellaBinding 'a' ?*>>! sav abellaAbort
       , abellaBinding '\r' ?*>>! sav abellaEvalFromProofPoint
-      ]))
+      ])
   }
-  where sav f = savingCommandY (flip replicateM_ f) 1
+  where sav f = savingCommandY (`replicateM_` f) 1
 
 abellaModeVim :: TokenBasedMode Abella.Token
 abellaModeVim = abellaModeGen (\ch -> [char '\\', char ch])
@@ -45,7 +49,7 @@ abellaModeEmacs :: TokenBasedMode Abella.Token
 abellaModeEmacs = abellaModeGen (\ch -> [ctrlCh 'c', ctrlCh ch])
 
 newtype AbellaBuffer = AbellaBuffer {_abellaBuffer :: Maybe BufferRef}
-    deriving (Initializable, Typeable, Binary)
+    deriving (Default, Typeable, Binary)
 instance YiVariable AbellaBuffer
 
 getProofPointMark :: BufferM Mark
@@ -91,7 +95,7 @@ abellaAbort = do abellaSend "abort."
 -- | Start Abella in a buffer
 abella :: CommandArguments -> YiM BufferRef
 abella (CommandArguments args) = do
-    b <- Interactive.interactive "abella" args
+    b <- Interactive.spawnProcess "abella" args
     withEditor . setDynamic . AbellaBuffer $ Just b
     return b
 
@@ -99,7 +103,7 @@ abella (CommandArguments args) = do
 -- Show it in another window.
 abellaGet :: YiM BufferRef
 abellaGet = withOtherWindow $ do
-    AbellaBuffer mb <- withEditor $ getDynamic
+    AbellaBuffer mb <- withEditor getDynamic
     case mb of
         Nothing -> abella (CommandArguments [])
         Just b -> do

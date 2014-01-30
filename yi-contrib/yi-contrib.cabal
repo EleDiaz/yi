@@ -12,7 +12,7 @@ maintainer:     yi-devel@googlegroups.com
 homepage:       http://haskell.org/haskellwiki/Yi
 bug-reports:    http://code.google.com/p/yi-editor/issues/list
 Cabal-Version:  >= 1.6
-tested-with:    GHC==7.4.2
+tested-with:    GHC==7.6.3
 build-type:     Simple
 
 library
@@ -33,9 +33,10 @@ library
   build-depends:
     base >=4.0 && <5,
     containers,
-    data-accessor >= 0.2.1.4 && < 0.3,
+    lens >= 3.9,
     directory < 1.3,
     filepath < 1.4,
     split >= 0.1 && < 0.3,
     mtl >= 0.1.0.1,
-    yi == 0.7.0
+    yi == 0.7.0,
+    transformers-base

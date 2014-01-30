@@ -30,23 +30,21 @@ module Yi.FuzzyOpen
     ( fuzzyOpen
     ) where
 
-import Prelude ()
 import Yi
 import Yi.MiniBuffer
 import Yi.Completion
 
-import Control.Monad (replicateM, replicateM_)
-import Control.Monad.Trans (liftIO)
+import Control.Monad (replicateM, replicateM_,forM,void)
+import Control.Monad.Base
 import System.Directory (doesDirectoryExist, getDirectoryContents)
-import System.FilePath (FilePath, (</>))
-import Data.List (filter, map, intersperse, drop)
-import Data.Maybe (isJust)
+import System.FilePath ((</>))
+import Data.List (intersperse)
 
 fuzzyOpen :: YiM ()
 fuzzyOpen = do
     withEditor splitE
     bufRef <- withEditor newTempBufferE
-    fileList <- liftIO $ getRecursiveContents "."
+    fileList <- liftBase $ getRecursiveContents "."
     updateMatchList bufRef fileList
     withEditor $ spawnMinibufferE "" $ const $ localKeymap bufRef fileList
     return ()
@@ -128,7 +126,7 @@ openRoutine preOpenAction bufRef = do
     withEditor $ do
         replicateM_ 2 closeBufferAndWindowE
         preOpenAction
-    discard $ editFile chosenFile
+    void $ editFile chosenFile
 
 insertChar :: Keymap
 insertChar = textChar >>= write . insertB

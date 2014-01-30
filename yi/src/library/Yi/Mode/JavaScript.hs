@@ -4,10 +4,15 @@
 
 module Yi.Mode.JavaScript (javaScriptMode, hooks) where
 
+import Control.Applicative
 import Control.Monad.Writer.Lazy (execWriter)
+import Control.Lens
 import Data.List (nub)
 import Data.Maybe (isJust)
-import Prelude (map)
+import Data.Default
+import Data.Foldable (toList)
+import Data.Typeable
+import Data.Binary
 import System.FilePath.Posix (takeBaseName)
 import Yi.Buffer.Basic (BufferRef, Direction(..), fromString)
 import Yi.Buffer.Indent (indentSettingsB, indentOfB, cycleIndentsB, newlineAndIndentB)
@@ -27,11 +32,11 @@ import Yi.Keymap.Keys (ctrlCh, (?>>), (?>>!), (<||))
 import Yi.Lexer.Alex (AlexState, Tok, lexScanner)
 import Yi.Lexer.JavaScript (alexScanToken, TT, initState, HlState, Token)
 import Yi.Modes (anyExtension)
-import Yi.Prelude hiding (list)
 import Yi.Syntax (ExtHL(..), mkHighlighter, Scanner, Point)
 import Yi.Syntax.JavaScript (Tree, parse, getStrokes)
 import Yi.Syntax.Tree (getLastPath)
 import Yi.Verifier.JavaScript (verify)
+import Yi.Monad
 import qualified Data.DList as D
 
 javaScriptAbstract :: Mode syntax
@@ -80,14 +85,14 @@ hooks :: Mode (Tree TT) -> Mode (Tree TT)
 hooks mode = mode
   {
     -- modeGetAnnotations = tokenBasedAnnots tta
-    modeKeymap = topKeymapA ^: (choice [ctrlCh 'c' ?>> ctrlCh 'l' ?>>! withSyntax modeFollow,
+    modeKeymap = topKeymapA %~ (choice [ctrlCh 'c' ?>> ctrlCh 'l' ?>>! withSyntax modeFollow,
                                         Event KEnter []           ?>>! newlineAndIndentB]
                                 <||)
   , modeFollow = YiA . jsCompile
   }
 
 newtype JSBuffer = JSBuffer (Maybe BufferRef)
-    deriving (Initializable, Typeable, Binary)
+    deriving (Default, Typeable, Binary)
 
 instance YiVariable JSBuffer
 
@@ -103,7 +108,7 @@ jsCompile tree = do
 -- | Returns the JS verifier buffer, creating it if necessary.
 getJSBuffer :: YiM BufferRef
 getJSBuffer = withOtherWindow $ do
-  JSBuffer mb <- withEditor $ getDynamic
+  JSBuffer mb <- withEditor getDynamic
   case mb of
     Nothing -> mkJSBuffer
     Just b  -> do stillExists <- withEditor $ isJust <$> findBuffer b

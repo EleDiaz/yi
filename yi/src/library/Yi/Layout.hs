@@ -1,4 +1,5 @@
 {-# LANGUAGE DeriveDataTypeable, ExistentialQuantification, DeriveFunctor, TupleSections, ViewPatterns #-}
+{-# LANGUAGE Rank2Types #-}
 {-# OPTIONS_GHC -funbox-strict-fields #-} -- we might as well unbox our Ints.
 
 -- | This module defines the layout manager interface (see 'LayoutManager'). To desgin a new layout manager, just make an instance of this class.
@@ -42,12 +43,13 @@ module Yi.Layout
   )
  where
 
-import Prelude()
-import Data.Accessor.Basic
-import Yi.Prelude
+import Control.Applicative
+import Control.Arrow (first)
+import Control.Lens hiding (set')
 import Data.Typeable
 import Data.Maybe
-import Data.List(length, splitAt)
+import Data.Default
+import Data.List (mapAccumL, foldl')
 import qualified Control.Monad.State.Strict as Monad
 
 -------------------------------- Some design notes ----------------------
@@ -98,14 +100,14 @@ data Layout a
   deriving(Typeable, Eq, Functor)
 
 -- | Accessor for the 'DividerPosition' with given reference
-dividerPositionA :: DividerRef -> Accessor (Layout a) DividerPosition
-dividerPositionA ref = fromSetGet setter getter where
+dividerPositionA :: DividerRef -> Lens' (Layout a) DividerPosition
+dividerPositionA ref = lens getter (flip setter) where
   setter pos = set'
     where
       set' s@(SingleWindow _) = s
       set' p@Pair{} | divRef p == ref = p{ divPos = pos }
                     | otherwise       = p{ pairFst = set' (pairFst p), pairSnd = set' (pairSnd p) }
-      set' s@Stack{} = s{ wins = fmap (\(l, r) -> (set' l, r)) (wins s) }
+      set' s@Stack{} = s{ wins = fmap (first set') (wins s) }
 
   getter = fromMaybe invalidRef . get'
 
@@ -121,9 +123,9 @@ instance Show a => Show (Layout a) where
   show (Stack o s) = show o ++ " stack " ++ show s
   show p@(Pair{}) = show (orientation p) ++ " " ++ show (pairFst p, pairSnd p)
 
--- | The initial layout consists of a single window
-instance Initializable a => Initializable (Layout a) where
-  initial = SingleWindow initial
+-- | The def layout consists of a single window
+instance Default a => Default (Layout a) where
+  def = SingleWindow def
 
 -- | Orientations for 'Stack' and 'Pair'
 data Orientation
@@ -177,8 +179,8 @@ instance LayoutManager (AnyLayoutManager) where
   previousVariant (AnyLayoutManager l) = AnyLayoutManager (previousVariant l)
 
 -- | The default layout is 'tallLayout'
-instance Initializable AnyLayoutManager where
-  initial = hPairNStack 1
+instance Default AnyLayoutManager where
+  def = hPairNStack 1
 
 -- | True if the internal layout managers have the same type (but are not necessarily equal).
 layoutManagerSameType :: AnyLayoutManager -> AnyLayoutManager -> Bool
@@ -240,7 +242,7 @@ newtype SlidyWide = SlidyWide (Transposed SlidyTall)
 
 -- | Transposed version of 'slidyTall'
 slidyWide :: AnyLayoutManager
-slidyWide = AnyLayoutManager (SlidyWide (Transposed (SlidyTall)))
+slidyWide = AnyLayoutManager (SlidyWide (Transposed SlidyTall))
 
 instance LayoutManager SlidyWide where
     pureLayout (SlidyWide w) = pureLayout w
@@ -315,7 +317,7 @@ class Transposable r where transpose :: r -> r
 instance Transposable Orientation where { transpose Horizontal = Vertical; transpose Vertical = Horizontal }
 instance Transposable (Layout a) where
     transpose (SingleWindow a) = SingleWindow a
-    transpose (Stack o ws) = Stack (transpose o) (fmap (\(l,r) -> (transpose l,r)) ws)
+    transpose (Stack o ws) = Stack (transpose o) (fmap (first transpose) ws)
     transpose (Pair o p r a b) = Pair (transpose o) p r (transpose a) (transpose b)
 
 -- | Same as 'lm', but with all 'Orientation's 'transpose'd. See 'slidyWide' for an example of its use.

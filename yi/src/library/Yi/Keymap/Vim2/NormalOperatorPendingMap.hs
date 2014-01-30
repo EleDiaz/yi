@@ -2,11 +2,10 @@ module Yi.Keymap.Vim2.NormalOperatorPendingMap
   ( defNormalOperatorPendingMap
   ) where
 
-import Prelude ()
-import Yi.Prelude
-
+import Control.Monad
+import Control.Applicative
 import Data.Char (isDigit)
-import Data.List (isPrefixOf, drop)
+import Data.List (isPrefixOf)
 import Data.Maybe (fromMaybe, fromJust)
 
 import Yi.Buffer hiding (Insert)
@@ -92,7 +91,7 @@ regionForOperatorLineB n style = normalizeRegion =<< StyledRegion style <$> savi
         p0 <- pointB
         return $! mkRegion p0 current
     else do
-        discard $ lineMoveRel (n-2)
+        void $ lineMoveRel (n-2)
         moveToEol
         rightB
         firstNonSpaceB

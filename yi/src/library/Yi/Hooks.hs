@@ -24,8 +24,8 @@ A way to achieve this is using hooks, as follows:
 > instance YiConfigVariable FilePrompter
 >
 > -- specify the default FilePrompter
-> instance Initializable FilePrompter where
->    initial = filePrompter1
+> instance Default FilePrompter where
+>    def = filePrompter1
 >
 > -- replace the old promptForFile function with a shim
 > promptForFile :: Maybe FilePath -> YiM FilePath
@@ -56,15 +56,14 @@ module Yi.Hooks(
  )
   where
 
-import Prelude()
+import Control.Lens
 import Yi.Config
-import Yi.Prelude
 import Yi.Dynamic
 import Yi.Editor
 import Yi.Keymap
 import Yi.Config.Simple.Types(customVariable, Field)
 
-{- | 
+{- |
 Looks up the configured value for the hook, and runs it. The argument to 'runHook' will typically be a record accessor. See 'HookType' for the valid hook types.
 -}
 runHook :: (HookType ty, YiConfigVariable var) => (var -> ty) -> ty
@@ -72,7 +71,7 @@ runHook = runHookImpl
 
 {- | The class of \"valid hooks\". This class is exported abstractly, but the instances can be phrased quite simply: the functions (of arbitrarily many arguments, including zero) which run in either the 'EditorM' or 'YiM' monads.
 
-A typical example would be something like 
+A typical example would be something like
 
 @Int -> String -> 'EditorM' String@.
 

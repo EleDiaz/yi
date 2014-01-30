@@ -1,9 +1,9 @@
-{-# LANGUAGE CPP, DeriveDataTypeable #-}
+{-# LANGUAGE CPP #-}
 -- Copyright (C) 2008 JP Bernardy
 
 -- | This module defines buffer operation on regions
 
-module Yi.Buffer.Region 
+module Yi.Buffer.Region
   (
    module Yi.Region
   , swapRegionsB
@@ -24,17 +24,18 @@ module Yi.Buffer.Region
   )
 where
 
-import Prelude ()
-import Yi.Prelude
-
+import Control.Applicative
+import Control.Monad
 import Data.Algorithm.Diff
 import Data.Char (isSpace)
-import Data.List (filter, length, sort, dropWhile)
+import Data.List (sort)
+import Data.Rope (Rope)
 
 import Yi.Buffer.Misc
 import Yi.Region
 import Yi.String (lines')
 import Yi.Window (winRegion)
+import Yi.Utils
 
 winRegionB :: BufferM Region
 winRegionB = askWindow winRegion
@@ -91,7 +92,7 @@ mapRegionB r f = do
   replaceRegionB r (fmap f text)
 
 -- | Swap the content of two Regions
-swapRegionsB :: Region -> Region -> BufferM ()  
+swapRegionsB :: Region -> Region -> BufferM ()
 swapRegionsB r r'
     | regionStart r > regionStart r' = swapRegionsB r' r
     | otherwise = do w0 <- readRegionB r
@@ -112,7 +113,7 @@ modifyRegionB :: (String -> String)
               -> BufferM ()
 modifyRegionB = replToMod replaceRegionB
 
-    
+
 -- | As 'modifyRegionB', but do a minimal edition instead of deleting the whole
 -- region and inserting it back.
 modifyRegionClever :: (String -> String) -> Region -> BufferM ()
@@ -150,8 +151,8 @@ skippingNull f xs = f xs
 joinLinesB :: Region -> BufferM ()
 joinLinesB =
   savingPointB .
-    (modifyRegionClever $ skippingLast $
-       concat . (skippingFirst $ fmap $ skippingNull ((' ':) . dropWhile isSpace)) . lines')
+    modifyRegionClever (skippingLast $
+       concat . skippingFirst (fmap $ skippingNull ((' ':) . dropWhile isSpace)) . lines')
 
 concatLinesB :: Region -> BufferM ()
-concatLinesB = savingPointB . (modifyRegionClever $ skippingLast $ filter (/='\n'))
+concatLinesB = savingPointB . modifyRegionClever (skippingLast $ filter (/= '\n'))

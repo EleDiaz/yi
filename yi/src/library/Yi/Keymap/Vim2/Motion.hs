@@ -1,7 +1,7 @@
 module Yi.Keymap.Vim2.Motion
     ( Move(..)
     , CountedMove(..)
-    , stringToMove 
+    , stringToMove
     , regionOfMoveB
     , changeMoveStyle
     ) where
@@ -40,13 +40,12 @@ module Yi.Keymap.Vim2.Motion
 -- same, which is more logical.  However, this causes a small incompatibility
 -- between Vi and Vim.
 
-import Prelude ()
-import Yi.Prelude
+import Prelude hiding (repeat)
 
-import Control.Monad (replicateM_)
+import Control.Applicative
+import Control.Monad
 
 import Data.Maybe (fromMaybe)
-import Data.Tuple (uncurry)
 
 import Yi.Buffer
 import Yi.Keymap.Vim2.Common
@@ -55,7 +54,7 @@ import Yi.Keymap.Vim2.StyledRegion
 data Move = Move {
     moveStyle :: !RegionStyle
   , moveIsJump :: !Bool
-  , moveAction :: (Maybe Int -> BufferM ())
+  , moveAction :: Maybe Int -> BufferM ()
   }
 
 data CountedMove = CountedMove !(Maybe Int) !Move
@@ -82,16 +81,16 @@ instance Functor ((,,) a b) where
 -- Linewise motions which treat no count as being the same as a count of 1.
 linewiseMotions :: [(String, Bool, Maybe Int -> BufferM ())]
 linewiseMotions = fmap withDefaultCount
-    [ ("j", False, discard . lineMoveRel)
-    , ("k", False, discard . lineMoveRel . negate)
-    , ("<Down>", False, discard . lineMoveRel)
-    , ("<Up>", False, discard . lineMoveRel . negate)
-    , ("-", False, const firstNonSpaceB <=< discard . lineMoveRel . negate)
-    , ("+", False, const firstNonSpaceB <=< discard . lineMoveRel)
+    [ ("j", False, void . lineMoveRel)
+    , ("k", False, void . lineMoveRel . negate)
+    , ("<Down>", False, void . lineMoveRel)
+    , ("<Up>", False, void . lineMoveRel . negate)
+    , ("-", False, const firstNonSpaceB <=< void . lineMoveRel . negate)
+    , ("+", False, const firstNonSpaceB <=< void . lineMoveRel)
     , ("_", False, \n -> do
-                when (n > 1) $ discard $ lineMoveRel (n - 1)
+                when (n > 1) $ void $ lineMoveRel (n - 1)
                 firstNonSpaceB)
-    , ("gg", True, discard . gotoLn) -- TODO: save column
+    , ("gg", True, void . gotoLn) -- TODO: save column
     , ("<C-b>", False, scrollScreensB . negate)
     , ("<PageUp>", False, scrollScreensB . negate)
     , ("<C-f>", False, scrollScreensB)
@@ -134,15 +133,15 @@ inclusiveMotions = fmap (\(key, action) -> (key, False, action . fromMaybe 1))
 
     -- Intraline stuff
     , ("g$", \n -> do
-                when (n > 1) $ discard $ lineMoveRel (n - 1)
+                when (n > 1) $ void $ lineMoveRel (n - 1)
                 moveToEol)
     , ("<End>", const $ moveToEol >> leftOnEol)
     , ("$", \n -> do
-                when (n > 1) $ discard $ lineMoveRel (n - 1)
+                when (n > 1) $ void $ lineMoveRel (n - 1)
                 moveToEol
                 leftOnEol)
     , ("g_", \n -> do
-                when (n > 1) $ discard $ lineMoveRel (n - 1)
+                when (n > 1) $ void $ lineMoveRel (n - 1)
                 lastNonSpaceB)
     ]
     ++

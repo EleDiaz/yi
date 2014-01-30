@@ -3,11 +3,8 @@ import Yi.Keymap.Vim (keymapSet)
 import qualified Yi.Mode.Haskell as Haskell
 import Yi.Style
 import Yi.Style.Library
-import Yi.Prelude
-import Prelude ()
 
 -- import Yi.UI.Vty (start)
--- import Yi.UI.Cocoa (start)
 -- import Yi.UI.Pango (start)
 
 -- Uncomment for Shim support

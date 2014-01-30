@@ -2,13 +2,11 @@ module Yi.Keymap.Vim2.ExMap
     ( defExMap
     ) where
 
-import Prelude (unwords, drop, length, reverse)
-import Yi.Prelude
-
 import Data.Char (isSpace)
 import Data.Maybe (fromJust)
 import Data.List.Split (splitWhen)
 import System.FilePath (isPathSeparator)
+import Control.Monad (when)
 
 import Yi.Buffer hiding (Insert)
 import Yi.Editor
@@ -18,6 +16,7 @@ import Yi.Keymap.Vim2.Common
 import Yi.Keymap.Vim2.StateUtils
 import Yi.Keymap.Vim2.Utils
 import Yi.Keymap.Vim2.Ex
+import Yi.Utils
 
 defExMap :: [String -> Maybe ExCommand] -> [VimBinding]
 defExMap cmdParsers =
@@ -50,9 +49,9 @@ completionBinding commandParsers = VimBindingY prereq action
                 ss -> do
                     let s = commonPrefix ss
                     updateCommand s
-                    withEditor 
-                        . printMsg 
-                        . unwords 
+                    withEditor
+                        . printMsg
+                        . unwords
                         . fmap (dropToLastWordOf s)
                         $ ss
           updateCommand :: String -> YiM ()
@@ -76,7 +75,7 @@ dropToLastWordOf s =
 
 exitEx :: Bool -> EditorM ()
 exitEx success = do
-    if success then historyFinish else return ()
+    when success historyFinish
     resetCountE
     switchModeE Normal
     closeBufferAndWindowE
@@ -126,7 +125,8 @@ failBindingE = VimBindingE prereq action
     where prereq evs s = matchFromBool . and $ [vsMode s == Ex, evs == "<CR>"]
           action _ = do
               exitEx False
-              printMsg "Unknown command"
+              s <- getDynamic
+              printMsg $ "Not an editor command: " ++ (vsOngoingInsertEvents s)
               return Drop
 
 printable :: VimBinding
@@ -137,7 +137,7 @@ printable = VimBindingE prereq editAction
 historyBinding :: VimBinding
 historyBinding = VimBindingE prereq action
     where prereq evs (VimState { vsMode = Ex }) =
-              matchFromBool $ evs `elem` (fmap fst binds)
+              matchFromBool $ evs `elem` fmap fst binds
           prereq _ _ = NoMatch
           action evs = do
               fromJust $ lookup evs binds

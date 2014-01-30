@@ -1,23 +1,25 @@
 {-# LANGUAGE CPP #-}
 -- Copyright (c) Jean-Philippe Bernardy 2006,2007,2008.
 
-module Yi.Config.Default (defaultConfig, availableFrontends, 
+module Yi.Config.Default (defaultConfig, availableFrontends,
                           defaultEmacsConfig, defaultVimConfig, defaultCuaConfig,
                           toVimStyleConfig, toVim2StyleConfig, toEmacsStyleConfig, toCuaStyleConfig) where
 
-import Control.Monad (forever)
+import Control.Applicative
+import Control.Monad
+import Control.Lens hiding (Action)
 import Data.Either (rights)
+import Data.Default
 import Paths_yi
-import Prelude ()
 import System.Directory
 import System.FilePath
-import System.IO (readFile)
 import Yi.Command (cabalBuildE, cabalConfigureE, grepFind, makeBuild, reloadProjectE, searchSources, shell)
 import {-# source #-} Yi.Boot
 import Yi.Config
 import Yi.Config.Misc
 import Yi.Paths(getConfigFilename)
 import Yi.Core
+import Yi.Utils
 import Yi.Eval(publishedActions)
 import Yi.File
 import Yi.IReader (saveAsNewArticle)
@@ -42,33 +44,22 @@ import qualified Yi.Mode.Latex as Latex
 import qualified Yi.Interact as I
 import qualified Data.Rope as R
 
-#ifdef FRONTEND_VTE
-import qualified Yi.UI.Vte
-#endif
 #ifdef FRONTEND_VTY
 import qualified Yi.UI.Vty
 #endif
 #ifdef FRONTEND_PANGO
 import qualified Yi.UI.Pango
 #endif
-#ifdef FRONTEND_COCOA
-import qualified Yi.UI.Cocoa
-#endif
 import qualified Yi.UI.Batch
 
+{-# ANN availableFrontends "HLint: ignore Use list literal" #-}
 availableFrontends :: [(String, UIBoot)]
 availableFrontends =
-#ifdef FRONTEND_VTE
-   ("vte", Yi.UI.Vte.start) :
-#endif
 #ifdef FRONTEND_VTY
    ("vty", Yi.UI.Vty.start) :
 #endif
 #ifdef FRONTEND_PANGO
    ("pango", Yi.UI.Pango.start) :
-#endif
-#ifdef FRONTEND_COCOA
-   ("cocoa", Yi.UI.Cocoa.start) :
 #endif
    ("batch", Yi.UI.Batch.start) :
    []
@@ -81,8 +72,8 @@ availableFrontends =
 -- Failing to conform to this rule exposes the code to instant deletion.
 
 defaultPublishedActions :: HM.HashMap String Action
-defaultPublishedActions = HM.fromList $ 
-    [ 
+defaultPublishedActions = HM.fromList
+    [
       ("atBoundaryB"            , box atBoundaryB)
     , ("cabalBuildE"            , box cabalBuildE)
     , ("cabalConfigureE"        , box cabalConfigureE)
@@ -101,7 +92,7 @@ defaultPublishedActions = HM.fromList $
     , ("makeBuild"              , box makeBuild)
     , ("moveB"                  , box moveB)
     , ("numberOfB"              , box numberOfB)
-    , ("pointB"                 , box pointB) 
+    , ("pointB"                 , box pointB)
     , ("regionOfB"              , box regionOfB)
     , ("regionOfPartB"          , box regionOfPartB)
     , ("regionOfPartNonEmptyB"  , box regionOfPartNonEmptyB)
@@ -122,18 +113,18 @@ defaultPublishedActions = HM.fromList $
 #endif
     ]
 
-  where 
+  where
     box :: (Show x, YiAction a x) => a -> Action
     box = makeAction
 
 
 defaultConfig :: Config
 defaultConfig = 
-  publishedActions ^= defaultPublishedActions $ 
+  publishedActions .~ defaultPublishedActions $
   Config { startFrontEnd    = case availableFrontends of
              [] -> error "panic: no frontend compiled in! (configure with -fvty or another frontend.)"
              ((_,f):_) -> f
-         , configUI         =  UIConfig 
+         , configUI         =  UIConfig
            { configFontSize = Nothing
            , configFontName = Nothing
            , configScrollWheelAmount = 4
@@ -182,7 +173,7 @@ defaultConfig =
          , configInputPreprocess = I.idAutomaton
          , bufferUpdateHandler = []
          , layoutManagers = [hPairNStack 1, vPairNStack 1, tall, wide]
-         , configVars = initial
+         , configVars = def
          }
 
 defaultEmacsConfig, defaultVimConfig, defaultCuaConfig :: Config
@@ -191,7 +182,7 @@ defaultVimConfig = toVimStyleConfig defaultConfig
 defaultCuaConfig = toCuaStyleConfig defaultConfig
 
 toEmacsStyleConfig, toVimStyleConfig, toVim2StyleConfig, toCuaStyleConfig :: Config -> Config
-toEmacsStyleConfig cfg 
+toEmacsStyleConfig cfg
     = cfg {
             configUI = (configUI cfg) { configVtyEscDelay = 1000 , configScrollStyle = Just SnapToCenter},
             defaultKm = Emacs.keymap,
@@ -204,7 +195,7 @@ toEmacsStyleConfig cfg
 -- Useful for emacs lovers ;)
 escToMeta :: I.P Event Event
 escToMeta = mkAutomaton $ forever $ (anyEvent >>= I.write) ||> do
-    discard $ event (spec KEsc)
+    void $ event (spec KEsc)
     c <- printableChar
     I.write (Event (KASCII c) [MMeta])
 
@@ -221,25 +212,25 @@ toCuaStyleConfig cfg = cfg {defaultKm = Cua.keymap}
 
 -- | Open an emacs-like scratch buffer if no file is open.
 openScratchBuffer :: YiM ()
-openScratchBuffer = withEditor $ do 
-      noFileBufOpen <- null . rights . fmap (getVal identA) . M.elems <$> getA buffersA
-      when noFileBufOpen $ do
-           discard $ newBufferE (Left "scratch") $ R.fromString $ unlines
+openScratchBuffer = withEditor $ do
+      noFileBufOpen <- null . rights . fmap (view identA) . M.elems <$> use buffersA
+      when noFileBufOpen $
+           void $ newBufferE (Left "scratch") $ R.fromString $ unlines
                    ["This buffer is for notes you don't want to save.", --, and for haskell evaluation" -- maybe someday?
                     "If you want to create a file, open that file,",
                     "then enter the text in that file's own buffer."]
 
 nilKeymap :: Keymap
 nilKeymap = choice [
-             char 'c' ?>>  openCfg (Cua.keymap)    "yi-cua.hs",
-             char 'e' ?>>  openCfg (Emacs.keymap)  "yi.hs",
-             char 'v' ?>>  openCfg (Vim.keymapSet) "yi-vim.hs",
+             char 'c' ?>>  openCfg Cua.keymap    "yi-cua.hs",
+             char 'e' ?>>  openCfg Emacs.keymap  "yi.hs",
+             char 'v' ?>>  openCfg Vim.keymapSet "yi-vim.hs",
              char 'q' ?>>! quitEditor,
              char 'r' ?>>! reload,
              char 'h' ?>>! configHelp
-            ] 
+            ]
             <|| (anyEvent >>! errorEditor "Keymap not defined, 'q' to quit, 'h' for help.")
-    where configHelp = newBufferE (Left "configuration help") $ R.fromString $ unlines $
+    where configHelp = newBufferE (Left "configuration help") $ R.fromString $ unlines
                          ["This instance of Yi is not configured.",
                           "To get a standard reasonable keymap, you can run yi with either --as=cua, --as=vim or --as=emacs.",
                           "You should however create your own ~/.config/yi/yi.hs file: ",
@@ -249,10 +240,10 @@ nilKeymap = choice [
             let exampleCfg = dataDir </> "example-configs" </> kmName
             cfgFile <- getConfigFilename -- automatically creates directory, if missing
             cfgExists <- io $ doesFileExist cfgFile
-            discard $ editFile cfgFile -- load config file
+            void $ editFile cfgFile -- load config file
             -- locally override the keymap to the user choice
             withBuffer $ modifyMode (\m -> m { modeKeymap = const km })
-            when (not cfgExists) $ do
+            unless cfgExists $ do
                 -- file did not exist, load a reasonable default
                 defCfg <- io $ readFile exampleCfg
                 withBuffer $ insertN defCfg
@@ -265,7 +256,7 @@ nilKeymap = choice [
 --            cfgExists <- io $ doesFileExist cfgFile
 --            -- io $ print cfgExists
 --            io $ createDirectoryIfMissing True cfgDir -- so that the file can be saved.
---            discard $ editFile cfgFile -- load config file
+--            void $ editFile cfgFile -- load config file
 --            -- locally override the keymap to the user choice
 --            withBuffer $ modifyMode (\m -> m {modeKeymap = const km})
 --            when (not cfgExists) $ do

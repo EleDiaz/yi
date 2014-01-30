@@ -1,11 +1,14 @@
-{-# LANGUAGE ScopedTypeVariables, FlexibleInstances, MultiParamTypeClasses, UndecidableInstances, TypeOperators #-}
+{-# LANGUAGE ScopedTypeVariables, FlexibleInstances, MultiParamTypeClasses,
+             UndecidableInstances, TypeOperators, LambdaCase, FlexibleContexts #-}
 
--- Copyright (c) 2005,2007,2008 Jean-Philippe Bernardy
+{- |
+Module      :  Yi.UI.Pango
+Copyright   :  (c) 2005,2007,2008 Jean-Philippe Bernardy
+License     :  GPL
 
-{-
-  This module is aimed at being a helper for the Emacs keybindings.
-  In particular this should be useful for anyone that has a custom
-  keymap derived from or based on the Emacs one.
+This module is aimed at being a helper for the Emacs keybindings. In
+particular this should be useful for anyone that has a custom keymap
+derived from or based on the Emacs one.
 -}
 
 module Yi.Keymap.Emacs.Utils
@@ -38,20 +41,20 @@ module Yi.Keymap.Emacs.Utils
 where
 
 {- Standard Library Module Imports -}
-
-import Prelude (take)
+import Control.Applicative
+import Control.Monad
+import Control.Lens hiding (re,act)
+import Data.Foldable (toList)
 import Data.List ((\\))
-import Data.Maybe (maybe)
+import Data.Maybe (fromMaybe)
 import System.FriendlyPath ()
 import System.FilePath (takeDirectory, takeFileName, (</>))
 import System.Directory
   ( doesDirectoryExist
   )
-import Control.Monad.Trans (MonadIO (..))
+import Control.Monad.Base
 {- External Library Module Imports -}
 {- Local (yi) module imports -}
-
-import Control.Monad (filterM, replicateM_)
 import Yi.Command (cabalConfigureE, cabalBuildE, reloadProjectE)
 import Yi.Core
 import Yi.Eval
@@ -62,6 +65,8 @@ import Yi.Regex
 import Yi.Tag
 import Yi.Search
 import Yi.Window
+import Yi.Utils
+import Yi.Monad
 {- End of Module Imports -}
 
 type UnivArgument = Maybe Int
@@ -88,11 +93,11 @@ deservesSave b
 
 -- | Is there a proper file associated with the buffer?
 -- In other words, does it make sense to offer to save it?
-isFileBuffer :: (Functor m, MonadIO m) => FBuffer -> m Bool
+isFileBuffer :: (Functor m, MonadBase IO m) => FBuffer -> m Bool
 isFileBuffer b = case b ^. identA of
                    Left _ -> return False
-                   Right fn -> not <$> liftIO (doesDirectoryExist fn)
-                     
+                   Right fn -> not <$> liftBase (doesDirectoryExist fn)
+
 --------------------------------------------------
 -- Takes in a list of buffers which have been identified
 -- as modified since their last save.
@@ -101,7 +106,7 @@ askIndividualSave :: Bool -> [FBuffer] -> YiM ()
 askIndividualSave True []  = modifiedQuitEditor
 askIndividualSave False [] = return ()
 askIndividualSave hasQuit allBuffers@(firstBuffer : others) =
-  withEditor (spawnMinibufferE saveMessage (const askKeymap)) >> return ()
+  void (withEditor (spawnMinibufferE saveMessage (const askKeymap)))
   where
   saveMessage = concat [ "do you want to save the buffer: "
                        , bufferName
@@ -110,9 +115,10 @@ askIndividualSave hasQuit allBuffers@(firstBuffer : others) =
   bufferName  = identString firstBuffer
 
   askKeymap = choice ([ char 'n' ?>>! noAction
-                      , char 'y' ?>>! yesAction 
-                      , char '!' ?>>! allAction 
-                      , oneOf [char 'c', ctrl $ char 'g'] >>! closeBufferAndWindowE 
+                      , char 'y' ?>>! yesAction
+                      , char '!' ?>>! allAction
+                      , oneOf [char 'c', ctrl $ char 'g']
+                        >>! closeBufferAndWindowE
                         -- cancel
                       ] ++ [char 'q' ?>>! quitEditor | hasQuit])
   yesAction = do fwriteBufferE (bkey firstBuffer)
@@ -125,7 +131,7 @@ askIndividualSave hasQuit allBuffers@(firstBuffer : others) =
   allAction = do mapM_ fwriteBufferE $ fmap bkey allBuffers
                  withEditor closeBufferAndWindowE
                  askIndividualSave hasQuit []
-  
+
   continue = askIndividualSave hasQuit others
 
 ---------------------------
@@ -139,12 +145,12 @@ modifiedQuitEditor =
   do modifiedBuffers <- getModifiedBuffers
      if null modifiedBuffers
         then quitEditor
-        else withEditor $ spawnMinibufferE modifiedMessage (const askKeymap) >> return ()
+        else withEditor $ void (spawnMinibufferE modifiedMessage (const askKeymap))
   where
   modifiedMessage = "Modified buffers exist really quit? (y/n)"
 
   askKeymap = choice [ char 'n' ?>>! noAction
-                     , char 'y' ?>>! quitEditor 
+                     , char 'y' ?>>! quitEditor
                      ]
 
   noAction        = closeBufferAndWindowE
@@ -168,41 +174,44 @@ searchKeymap = selfSearchKeymap <|> choice
                ]
 
 isearchKeymap :: Direction -> Keymap
-isearchKeymap dir = 
+isearchKeymap dir =
   do write $ isearchInitE dir
-     discard $ many searchKeymap
+     void $ many searchKeymap
      choice [ ctrl (char 'g') ?>>! isearchCancelE
             , oneOf [ctrl (char 'm'), spec KEnter] >>! isearchFinishE
-            ] 
+            ]
        <|| write isearchFinishE
 
 ----------------------------
 -- query-replace
 queryReplaceE :: YiM ()
-queryReplaceE = do
-    withMinibufferFree "Replace:" $ \replaceWhat -> do
+queryReplaceE = withMinibufferFree "Replace:" $ \replaceWhat ->
     withMinibufferFree "With:" $ \replaceWith -> do
-    b <- gets currentBuffer
-    win <- getA currentWindowA
-    let replaceKm = choice [char 'n' ?>>! qrNext win b re,
-                            char '!' ?>>! qrReplaceAll win b re replaceWith,
-                            oneOf [char 'y', char ' '] >>! qrReplaceOne win b re replaceWith,
-                            oneOf [char 'q', ctrl (char 'g')] >>! qrFinish
-                           ]
-        Right re = makeSearchOptsM [] replaceWhat
-    withEditor $ do
-       setRegexE re
-       discard $ spawnMinibufferE
-            ("Replacing " ++ replaceWhat ++ " with " ++ replaceWith ++ " (y,n,q,!):")
-            (const replaceKm)
-       qrNext win b re
+        b <- gets currentBuffer
+        win <- use currentWindowA
+        let replaceKm = choice [char 'n' ?>>! qrNext win b re,
+                                char '!' ?>>! qrReplaceAll win b re replaceWith,
+                                oneOf [char 'y', char ' ']
+                                >>! qrReplaceOne win b re replaceWith,
+                                oneOf [char 'q', ctrl (char 'g')] >>! qrFinish
+                               ]
+            Right re = makeSearchOptsM [] replaceWhat
+        withEditor $ do
+           setRegexE re
+           void $ spawnMinibufferE
+                ("Replacing " ++ replaceWhat ++ " with "
+                 ++ replaceWith ++ " (y,n,q,!):")
+                (const replaceKm)
+           qrNext win b re
 
 executeExtendedCommandE :: YiM ()
-executeExtendedCommandE = withMinibuffer "M-x" (const getAllNamesInScope) execEditorAction
+executeExtendedCommandE
+  = withMinibuffer "M-x" (const getAllNamesInScope) execEditorAction
 
 evalRegionE :: YiM ()
 evalRegionE = do
-  discard $ withBuffer (getSelectRegionB >>= readRegionB) >>= return -- FIXME: do something sensible.
+  -- FIXME: do something sensible.
+  void $ withBuffer (getSelectRegionB >>= readRegionB)
   return ()
 
 -- * Code for various commands
@@ -217,15 +226,13 @@ insertNextC a = do c <- anyEvent
 
 -- | Convert the universal argument to a number of repetitions
 argToInt :: UnivArgument -> Int
-argToInt a = case a of
-    Nothing -> 1
-    Just x -> x
+argToInt = fromMaybe 1
 
 
 digit :: (Event -> Event) -> KeymapM Char
 digit f = charOf f '0' '9'
 
--- TODO: replace tt by digit meta 
+-- TODO: replace tt by digit meta
 tt :: KeymapM Char
 tt = do
   Event (KASCII c) _ <- foldr1 (<|>) $ fmap (event . metaCh ) ['0'..'9']
@@ -236,10 +243,7 @@ tt = do
 -- read: http://www.gnu.org/software/emacs/manual/html_node/Arguments.html
 -- and: http://www.gnu.org/software/emacs/elisp-manual/html_node/elisp_318.html
 readUniversalArg :: KeymapM (Maybe Int)
-readUniversalArg = 
-           Just <$> ((ctrlCh 'u' ?>> (read <$> some (digit id) <|> pure 4))
-           <|> (read <$> (some tt)))
-           <|> pure Nothing
+readUniversalArg = optional ((ctrlCh 'u' ?>> (read <$> some (digit id) <|> pure 4)) <|> (read <$> some tt))
 
 
 -- | Open a file using the minibuffer. We have to set up some stuff to allow hints
@@ -247,14 +251,14 @@ readUniversalArg =
 findFile :: YiM ()
 findFile = promptFile "find file:" $ \filename -> do
                 msgEditor $ "loading " ++ filename
-                discard $ editFile filename
+                void $ editFile filename
 
 -- | Open a file in a new tab using the minibuffer.
 findFileNewTab :: YiM ()
 findFileNewTab = promptFile "find file (new tab): " $ \filename -> do
                       withEditor newTabE
                       msgEditor $ "loading " ++ filename
-                      discard $ editFile filename
+                      void $ editFile filename
 
 
 scrollDownE :: UnivArgument -> BufferM ()
@@ -269,12 +273,17 @@ scrollUpE a = case a of
 
 switchBufferE :: YiM ()
 switchBufferE = do
-    openBufs <- fmap bufkey . toList <$> getA windowsA
-    names <- withEditor $ do bs <- fmap bkey <$> getBufferStack
-                             let choices = (bs \\ openBufs) ++ openBufs -- put the open buffers at the end.
-                             prefix <- gets commonNamePrefix
-                             forM choices $ \k -> gets (shortIdentString prefix . findBufferWith k)
-    withMinibufferFin "switch to buffer:" names (withEditor . switchToBufferWithNameE)
+    openBufs <- fmap bufkey . toList <$> use windowsA
+    names <- withEditor $ do
+      bs <- fmap bkey <$> getBufferStack
+
+      -- put the open buffers at the end.
+      let choices = (bs \\ openBufs) ++ openBufs
+
+      prefix <- gets commonNamePrefix
+      forM choices $ \k -> gets (shortIdentString prefix . findBufferWith k)
+    withMinibufferFin "switch to buffer:" names
+      (withEditor . switchToBufferWithNameE)
 
 killBufferE :: BufferRef ::: ToKill -> YiM ()
 killBufferE (Doc b) = do
@@ -285,17 +294,35 @@ killBufferE (Doc b) = do
                            , ctrlCh 'g' ?>>! closeBufferAndWindowE
                            ]
         delBuf = deleteBuffer b
-    withEditor $ 
-       if ch then (spawnMinibufferE (identString buf ++ " changed, close anyway? (y/n)") (const askKeymap)) >> return () 
-             else delBuf
+    withEditor $
+       if ch
+       then void (spawnMinibufferE (identString buf ++ " changed, close anyway? (y/n)") (const askKeymap))
+       else delBuf
 
 
 -- | If on separators (space, tab, unicode seps), reduce multiple
---   separators to just a single separator.
+-- separators to just a single separator. If we aren't looking at a separator,
+-- insert a single space. This kind of behaves as emacs ‘just-one-space’
+-- function with the argument of ‘1’ but it prefers to use the separator we're
+-- looking at instead of assuming a space.
 justOneSep :: BufferM ()
-justOneSep = doIfCharB isAnySep $ do genMaybeMoveB unitSepThisLine (Backward,InsideBound) Backward
-                                     moveB Character Forward
-                                     doIfCharB isAnySep $ deleteB unitSepThisLine Forward
+justOneSep = readB >>= \c ->
+  pointB >>= \point -> case point of
+    Point 0 -> if isAnySep c then deleteSeparators else insertB ' '
+    Point x ->
+      if isAnySep c
+      then deleteSeparators
+      else readAtB (Point $ x - 1) >>= \d ->
+        -- We weren't looking at separator but there might be one behind us
+        if isAnySep d
+          then moveB Character Backward >> deleteSeparators
+          else insertB ' ' -- no separators, insert a space just like emacs does
+  where
+    deleteSeparators = do
+      genMaybeMoveB unitSepThisLine (Backward, InsideBound) Backward
+      moveB Character Forward
+      doIfCharB isAnySep $ deleteB unitSepThisLine Forward
+
 
 
 -- | Join this line to previous (or next N if universal)
@@ -303,7 +330,8 @@ joinLinesE :: UnivArgument -> BufferM ()
 joinLinesE a = do case a of
                      Nothing -> return ()
                      Just _n -> moveB VLine Forward
-                  moveToSol >> transformB (\_ -> " ") Character Backward >> justOneSep
+                  moveToSol >> transformB (const " ") Character Backward
+                    >> justOneSep
 
 -- | Shortcut to use a default list when a blank list is given.
 -- Used for default values to emacs queries
@@ -325,9 +353,10 @@ promptTag = do
   let hinter =  return . take 10 . maybe fail hintTags tagTable
   -- Completions are super-cheap. Go wild
   let completer =  return . maybe id completeTag tagTable
-  withMinibufferGen "" hinter ("Find tag: (default " ++ defaultTag ++ ")") completer  $
-                 -- if the string is "" use the defaultTag
-                 gotoTag . maybeList defaultTag
+  withMinibufferGen "" hinter ("Find tag: (default " ++ defaultTag ++ ")")
+    completer (const $ return ()) $
+      -- if the string is "" use the defaultTag
+      gotoTag . maybeList defaultTag
 
 -- | Opens the file that contains @tag@. Uses the global tag table and prompts
 -- the user to open one if it does not exist
@@ -337,8 +366,8 @@ gotoTag tag =
         case lookupTag tag tagTable of
           Nothing -> fail $ "No tags containing " ++ tag
           Just (filename, line) -> do
-            discard $ editFile filename
-            discard $ withBuffer $ gotoLn line
+            void $ editFile filename
+            void $ withBuffer $ gotoLn line
             return ()
 
 -- | Call continuation @act@ with the TagTable. Uses the global table
@@ -350,7 +379,7 @@ visitTagTable act = do
     case posTagTable of
       Just tagTable -> act tagTable
       Nothing ->
-          promptFile ("Visit tags table: (default tags)") $ \path -> do
+          promptFile "Visit tags table: (default tags)" $ \path -> do
                        -- default emacs behavior, append tags
                        let filename = maybeList "tags" $ takeFileName path
                        tagTable <- io $ importTagTable $

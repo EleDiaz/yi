@@ -1,11 +1,12 @@
-{-# LANGUAGE DeriveDataTypeable, GeneralizedNewtypeDeriving, Rank2Types #-}
+{-# LANGUAGE DeriveDataTypeable, GeneralizedNewtypeDeriving
+           , Rank2Types #-}
 -- Copyright (c) 2008 Jean-Philippe Bernardy
 -- | Haskell-specific modes and commands.
-module Yi.Mode.Haskell 
+module Yi.Mode.Haskell
   (
    -- * Modes
    haskellAbstract,
-   cleverMode, 
+   cleverMode,
    preciseMode,
    literateMode,
    fastMode,
@@ -17,10 +18,14 @@ module Yi.Mode.Haskell
    ghciInferType,
   ) where
 
+import Prelude hiding (and,error,elem,notElem,all,concatMap,exp)
+import Data.Maybe (listToMaybe, isJust, catMaybes)
+import Data.Default
+import Data.Foldable
+import Data.Typeable
 import Data.Binary
-import Data.List (dropWhile, takeWhile, filter, drop, length)
-import Data.Maybe (maybe, listToMaybe, isJust, catMaybes)
-import Prelude (unwords, zipWith)
+import Control.Applicative
+import Control.Monad hiding (forM_)
 import Yi.Core
 import Yi.File
 import Yi.Lexer.Alex (Tok(..),Posn(..),tokBegin,tokEnd,tokRegion)
@@ -36,18 +41,22 @@ import qualified Yi.IncrementalParse as IncrParser
 import qualified Yi.Lexer.Alex as Alex
 import qualified Yi.Lexer.LiterateHaskell as LiterateHaskell
 import Yi.Lexer.Haskell as Haskell
+import qualified Yi.Mode.GHCi as GHCi
 import qualified Yi.Mode.Interactive as Interactive
 import Yi.Modes (anyExtension, extensionOrContentsMatch)
 import Yi.MiniBuffer
+import Yi.Debug
+import Yi.Monad
+import Yi.Utils
 
 haskellAbstract :: Mode (tree TT)
-haskellAbstract = emptyMode 
+haskellAbstract = emptyMode
   {
      modeApplies = extensionOrContentsMatch extensions shebangPattern,
      modeName = "haskell",
      modeToggleCommentSelection = toggleCommentSelectionB "-- " "--"
   }
-     {-    
+     {-
      Some of these are a little questionably haskell
      related. For example ".x" is an alex lexer specification
      I dare say that there are other file types that use ".x"
@@ -67,7 +76,7 @@ cleverMode = haskellAbstract
     Driver.mkHighlighter (skipScanner 50 . IncrParser.scanner Paren.parse . Paren.indentScanner . haskellLexer)
 
   , modeAdjustBlock = adjustBlock
-  , modePrettify = (cleverPrettify . allToks)
+  , modePrettify = cleverPrettify . allToks
   , modeGetAnnotations = tokenBasedAnnots Paren.tokenToAnnot
 
  }
@@ -109,8 +118,8 @@ preciseMode = haskellAbstract
  }
 
 
-haskellLexer :: Scanner Point Char -> Scanner (Alex.AlexState Haskell.HlState) (Tok Token) 
-haskellLexer = Alex.lexScanner Haskell.alexScanToken Haskell.initState 
+haskellLexer :: Scanner Point Char -> Scanner (Alex.AlexState Haskell.HlState) (Tok Token)
+haskellLexer = Alex.lexScanner Haskell.alexScanToken Haskell.initState
 
 literateHaskellLexer :: Scanner Point Char -> Scanner (Alex.AlexState LiterateHaskell.HlState) (Tok Token)
 literateHaskellLexer = Alex.lexScanner LiterateHaskell.alexScanToken LiterateHaskell.initState
@@ -122,7 +131,7 @@ adjustBlock e len = do
   let t = Paren.getIndentingSubtree e p l
   case t of
     Nothing -> return ()
-    Just it -> 
+    Just it ->
            savingExcursionB $ do
                    let (_startOfs, height) = Paren.getSubtreeSpan it
                    col <- curCol
@@ -133,10 +142,9 @@ adjustBlock e len = do
                                -- which should not be changed.
                                when (indent > col) $
                                 if len >= 0
-                                 then do insertN (replicate len ' ') 
+                                 then do insertN (replicate len ' ')
                                          leftN len
-                                 else do
-                                    deleteN (negate len)
+                                 else deleteN (negate len)
 
 -- | Returns true if the token should be indented to look as "inside" the group.
 insideGroup :: Token -> Bool
@@ -154,23 +162,23 @@ cleverAutoIndentHaskellB e behaviour = do
   let onThisLine ofs = ofs >= solPnt && ofs <= eolPnt
       firstTokNotOnLine = listToMaybe .
                               filter (not . onThisLine . posnOfs . tokPosn) .
-                              filter (not . isErrorTok . tokT) . concatMap allToks 
+                              filter (not . isErrorTok . tokT) . concatMap allToks
   let stopsOf :: [Paren.Tree TT] -> [Int]
-      stopsOf (g@(Paren.Paren open ctnt close):ts') 
+      stopsOf (g@(Paren.Paren open ctnt close):ts')
           | isErrorTok (tokT close) || getLastOffset g >= solPnt
               = [groupIndent open ctnt]  -- stop here: we want to be "inside" that group.
           | otherwise = stopsOf ts' -- this group is closed before this line; just skip it.
-      stopsOf ((Paren.Atom (Tok {tokT = t})):_) | startsLayout t = [nextIndent, previousIndent + indentLevel]
+      stopsOf (Paren.Atom (Tok {tokT = t}):_) | startsLayout t = [nextIndent, previousIndent + indentLevel]
         -- of; where; etc. we want to start the block here.
         -- Also use the next line's indent:
         -- maybe we are putting a new 1st statement in the block here.
-      stopsOf ((Paren.Atom _):ts) = stopsOf ts
+      stopsOf (Paren.Atom _:ts) = stopsOf ts
          -- any random part of expression, we ignore it.
       stopsOf (t@(Paren.Block _):ts) = shiftBlock + maybe 0 (posnCol . tokPosn) (getFirstElement t) : stopsOf ts
       stopsOf (_:ts) = stopsOf ts
       stopsOf [] = []
-      firstTokOnLine = fmap tokT $ listToMaybe $ 
-          dropWhile ((solPnt >) . tokBegin) $ 
+      firstTokOnLine = fmap tokT $ listToMaybe $
+          dropWhile ((solPnt >) . tokBegin) $
           takeWhile ((eolPnt >) . tokBegin) $ -- for laziness.
           filter (not . isErrorTok . tokT) $ allToks e
       shiftBlock = case firstTokOnLine of
@@ -185,7 +193,7 @@ cleverAutoIndentHaskellB e behaviour = do
               Nothing -> openCol + nominalIndent openChar -- no such token: indent normally.
               Just t -> posnCol . tokPosn $ t -- indent along that other token
           | otherwise = openCol
-      groupIndent (Tok _ _ _) _ = error "unable to indent code"
+      groupIndent (Tok {}) _ = error "unable to indent code"
   case getLastPath [e] solPnt of
     Nothing -> return ()
     Just path -> let stops = stopsOf path
@@ -212,24 +220,24 @@ cleverAutoIndentHaskellC e behaviour = do
             -- stop here: we want to be "inside" that group.
           | otherwise = stopsOf ts
            -- this group is closed before this line; just skip it.
-      stopsOf ((Hask.PAtom (Tok {tokT = t}) _):_) | startsLayout t || (t == ReservedOp Equal)
+      stopsOf (Hask.PAtom (Tok {tokT = t}) _:_) | startsLayout t || (t == ReservedOp Equal)
           = [nextIndent, previousIndent + indentLevel]
         -- of; where; etc. ends the previous line. We want to start the block here.
         -- Also use the next line's indent:
         -- maybe we are putting a new 1st statement in the block here.
       stopsOf (l@(Hask.PLet _ (Hask.Block _) _):ts') = [colOf' l | lineStartsWith (Reserved Haskell.In)] ++ stopsOf ts'
                                                        -- offer to align with let only if this is an "in"
-      stopsOf (t@(Hask.Block _):ts') = [shiftBlock + colOf' t] ++ stopsOf ts' 
+      stopsOf (t@(Hask.Block _):ts') = (shiftBlock + colOf' t) : stopsOf ts'
                                        -- offer add another statement in the block
-      stopsOf ((Hask.PGuard' (PAtom pipe  _) _ _):ts') = [tokCol pipe | lineStartsWith (ReservedOp Haskell.Pipe)] ++ stopsOf ts'
+      stopsOf (Hask.PGuard' (PAtom pipe _) _ _:ts') = [tokCol pipe | lineStartsWith (ReservedOp Haskell.Pipe)] ++ stopsOf ts'
                                                                  -- offer to align against another guard
       stopsOf (d@(Hask.PData {}):ts') = colOf' d + indentLevel
                                            : stopsOf ts' --FIXME!
-      stopsOf ((Hask.RHS (Hask.PAtom{}) (exp)):ts')
-          = [(case firstTokOnLine of
+      stopsOf (Hask.RHS (Hask.PAtom{}) exp:ts')
+          = [case firstTokOnLine of
               Just (Operator op) -> opLength op (colOf' exp) -- Usually operators are aligned against the '=' sign
-              -- case of an operator should check so that value always is at least 1 
-              _ -> colOf' exp) | lineIsExpression ] ++ stopsOf ts'
+              -- case of an operator should check so that value always is at least 1
+              _ -> colOf' exp | lineIsExpression ] ++ stopsOf ts'
                    -- offer to continue the RHS if this looks like an expression.
       stopsOf [] = [0] -- maybe it's new declaration in the module
       stopsOf (_:ts) = stopsOf ts -- by default, there is no reason to indent against an expression.
@@ -260,7 +268,7 @@ cleverAutoIndentHaskellC e behaviour = do
               -- no such token: indent normally.
               Just t -> posnCol . tokPosn $ t -- indent along that other token
           | otherwise = openCol
-      groupIndent (Tok _ _ _) _ = error "unable to indent code"
+      groupIndent (Tok{}) _ = error "unable to indent code"
   case getLastPath [e] solPnt of
     Nothing -> return ()
     Just path ->let stops = stopsOf path
@@ -300,16 +308,16 @@ cleverPrettify :: [TT] -> BufferM ()
 cleverPrettify toks = do
   pnt <- pointB
   let groups = groupBy' coalesce toks
-      isCommentGroup g = (tokTyp $ tokT $ head $ g) `elem` fmap Just [Haskell.Line] 
-      thisCommentGroup = listToMaybe $ dropWhile ((pnt >) . tokEnd . last) $ filter isCommentGroup $ groups
+      isCommentGroup g = tokTyp (tokT $ head g) `elem` fmap Just [Haskell.Line]
+      thisCommentGroup = listToMaybe $ dropWhile ((pnt >) . tokEnd . last) $ filter isCommentGroup groups
                          -- FIXME: laziness
   case thisCommentGroup of
     Nothing -> return ()
     Just g -> do let region = mkRegion (tokBegin . head $ g) (tokEnd . last $ g)
                  text <- unwords . fmap (drop 2) <$> mapM tokText g
-                 modifyRegionClever (const $ unlines' $ fmap ("-- " ++) $ fillText 80 $ text) region
-                 
-tokTyp :: Token -> Maybe Haskell.CommentType 
+                 modifyRegionClever (const $ unlines' $ fmap ("-- " ++) $ fillText 80 text) region
+
+tokTyp :: Token -> Maybe Haskell.CommentType
 tokTyp (Comment t) = Just t
 tokTyp _ = Nothing
 
@@ -344,13 +352,13 @@ tokTyp _ = Nothing
 
 
 newtype GhciBuffer = GhciBuffer {_ghciBuffer :: Maybe BufferRef}
-    deriving (Initializable, Typeable, Binary)
+    deriving (Default, Typeable, Binary)
 
 instance YiVariable GhciBuffer
 -- | Start GHCi in a buffer
 ghci :: YiM BufferRef
-ghci = do 
-    b <- Interactive.interactive "ghci" []
+ghci = do
+    b <- GHCi.spawnProcess "ghci" []
     withEditor $ setDynamic $ GhciBuffer $ Just b
     return b
 
@@ -358,38 +366,39 @@ ghci = do
 -- Show it in another window.
 ghciGet :: YiM BufferRef
 ghciGet = withOtherWindow $ do
-    GhciBuffer mb <- withEditor $ getDynamic
+    GhciBuffer mb <- withEditor getDynamic
     case mb of
         Nothing -> ghci
         Just b -> do
             stillExists <- withEditor $ isJust <$> findBuffer b
-            if stillExists 
+            if stillExists
                 then do withEditor $ switchToBufferE b
                         return b
                 else ghci
-    
+
 -- | Send a command to GHCi
 ghciSend :: String -> YiM ()
 ghciSend cmd = do
     b <- ghciGet
     withGivenBuffer b botB
     sendToProcess b (cmd ++ "\n")
-    
+
 -- | Load current buffer in GHCi
 ghciLoadBuffer :: YiM ()
 ghciLoadBuffer = do
     fwriteE
-    Just filename <- withBuffer $ gets file
-    ghciSend $ ":load " ++ filename
-
-
+    f <- withBuffer (gets file)
+    case f of
+      Nothing -> error "Couldn't get buffer filename in ghciLoadBuffer"
+      Just filename -> ghciSend $ ":load " ++ show filename
 
 -- Tells ghci to infer the type of the identifier at point. Doesn't check for errors (yet)
 ghciInferType :: YiM ()
 ghciInferType = do
     nm <- withBuffer $ readUnitB unitWord
-    when (not $ null nm) $ 
-        withMinibufferGen nm noHint "Insert type of which identifier?" return ghciInferTypeOf
+    unless (null nm) $
+        withMinibufferGen nm noHint "Insert type of which identifier?"
+        return (const $ return ()) ghciInferTypeOf
 
 ghciInferTypeOf :: String -> YiM ()
 ghciInferTypeOf nm = do
@@ -398,4 +407,3 @@ ghciInferTypeOf nm = do
     let successful = (not . null) nm &&and (zipWith (==) nm result)
     when successful $
          withBuffer $ moveToSol *> insertB '\n' *> leftB *> insertN result *> rightB
-

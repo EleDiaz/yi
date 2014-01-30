@@ -1,10 +1,10 @@
-{-# LANGUAGE ScopedTypeVariables, FlexibleInstances, MultiParamTypeClasses, UndecidableInstances, TypeSynonymInstances, 
+{-# LANGUAGE ScopedTypeVariables, FlexibleInstances, MultiParamTypeClasses, UndecidableInstances, TypeSynonymInstances,
   TypeOperators, EmptyDataDecls, DeriveDataTypeable, GeneralizedNewtypeDeriving #-}
 
-module Yi.MiniBuffer 
+module Yi.MiniBuffer
  (
   spawnMinibufferE,
-  withMinibufferFree, withMinibuffer, withMinibufferGen, withMinibufferFin, 
+  withMinibufferFree, withMinibuffer, withMinibufferGen, withMinibufferFin,
   noHint, noPossibilities, mkCompleteFn, simpleComplete, infixComplete, infixComplete', anyModeByName, getAllModeNames,
   matchingBufferNames, anyModeByNameM, anyModeName,
 
@@ -13,17 +13,24 @@ module Yi.MiniBuffer
   CommandArguments(..)
  ) where
 
-import Prelude (filter, length, words)
+import Control.Applicative
+import Control.Monad
+import Control.Lens hiding (act)
 import Data.List (isInfixOf)
 import qualified Data.List.PointedList.Circular as PL
 import Data.Maybe
 import Data.String (IsString)
+import Data.Typeable
+import Data.Foldable (find)
 import Yi.Config
 import Yi.Core
 import Yi.History
 import Yi.Completion (infixMatch, prefixMatch, containsMatch', completeInList, completeInList')
 import Yi.Style (defaultStyle)
+import Yi.Utils
+import Yi.Monad
 import qualified Data.Rope as R
+import System.CanonicalizePath (replaceShorthands)
 
 -- | Open a minibuffer window with the given prompt and keymap
 -- The third argument is an action to perform after the minibuffer
@@ -33,7 +40,7 @@ spawnMinibufferE :: String -> KeymapEndo -> EditorM BufferRef
 spawnMinibufferE prompt kmMod =
     do b <- stringToNewBuffer (Left prompt) (R.fromString "")
        -- Now create the minibuffer keymap and switch to the minibuffer window
-       withGivenBuffer0 b $ do
+       withGivenBuffer0 b $
          modifyMode $ \m -> m { modeKeymap = \kms -> kms { topKeymap = kmMod (insertKeymap kms)
                                                          , startTopKeymap = kmMod (startInsertKeymap kms)
                                                          } }
@@ -41,10 +48,10 @@ spawnMinibufferE prompt kmMod =
        -- First: This way the minibuffer is just below the window that was in focus when
        -- the minibuffer was spawned. This clearly indicates what window is the target of
        -- some actions. Such as searching or the :w (save) command in the Vim keymap.
-       -- Second: The users of the minibuffer expect the window and buffer that was in 
+       -- Second: The users of the minibuffer expect the window and buffer that was in
        -- focus when the minibuffer was spawned to be in focus when the minibuffer is closed
        -- Given that window focus works as follows:
-       --    - The new window is broguht into focus. 
+       --    - The new window is broguht into focus.
        --    - The previous window in focus is to the left of the new window in the window
        --    set list.
        --    - When a window is deleted and is in focus then the window to the left is brought
@@ -53,15 +60,16 @@ spawnMinibufferE prompt kmMod =
        -- If the minibuffer is moved then when the minibuffer is deleted the window brought
        -- into focus may not be the window that spawned the minibuffer.
        w <- newWindowE True b
-       modA windowsA (PL.insertRight w)
+       (%=) windowsA (PL.insertRight w)
        return b
 
+{-# ANN withMinibuffer "HLint: ignore Eta reduce" #-}
 -- | @withMinibuffer prompt completer act@: open a minibuffer with @prompt@. Once
 -- a string @s@ is obtained, run @act s@. @completer@ can be used to complete
 -- functions: it returns a list of possible matches.
 withMinibuffer :: String -> (String -> YiM [String]) -> (String -> YiM ()) -> YiM ()
-withMinibuffer prompt getPossibilities act = 
-  withMinibufferGen "" giveHint prompt completer act
+withMinibuffer prompt getPossibilities act =
+  withMinibufferGen "" giveHint prompt completer (const $ return ()) act
     where giveHint s = catMaybes . fmap (prefixMatch s) <$> getPossibilities s
           completer = simpleComplete getPossibilities
 
@@ -87,55 +95,73 @@ noPossibilities :: String -> YiM [ String ]
 noPossibilities _s = return []
 
 withMinibufferFree :: String -> (String -> YiM ()) -> YiM ()
-withMinibufferFree prompt = withMinibufferGen "" noHint prompt return
+withMinibufferFree prompt = withMinibufferGen "" noHint prompt
+                            return (const $ return ())
 
--- | @withMinibufferGen proposal getHint prompt completer act@: open a minibuffer
--- with @prompt@, and initial content @proposal@. Once a string @s@ is obtained,
--- run @act s@. @completer@ can be used to complete inputs by returning an
--- incrementally better match, and getHint can give an immediate feedback to the
--- user on the current input.
-withMinibufferGen :: String -> (String -> YiM [String]) -> 
-                     String -> (String -> YiM String) -> (String -> YiM ()) -> YiM ()
-withMinibufferGen proposal getHint prompt completer act = do
+-- | @withMinibufferGen proposal getHint prompt completer onTyping act@:
+-- open a minibuffer with @prompt@, and initial content @proposal@. Once
+-- a string @s@ is obtained, run @act s@. @completer@ can be used to
+-- complete inputs by returning an incrementally better match, and
+-- getHint can give an immediate feedback to the user on the current
+-- input.
+--
+-- @on Typing@ is an extra action which will fire with every user
+-- key-press and receives minibuffer contents. Use something like
+-- @const $ return ()@ if you don't need this.
+withMinibufferGen :: String -> (String -> YiM [String]) -> String
+                  -> (String -> YiM String) -> (String -> YiM ())
+                  -> (String -> YiM ()) -> YiM ()
+withMinibufferGen proposal getHint prompt completer onTyping act = do
   initialBuffer <- gets currentBuffer
-  initialWindow <- getA currentWindowA
+  initialWindow <- use currentWindowA
   let innerAction :: YiM ()
       -- ^ Read contents of current buffer (which should be the minibuffer), and
       -- apply it to the desired action
       closeMinibuffer = closeBufferAndWindowE >>
-                        modA windowsA (fromJust . PL.find initialWindow)
+                        (%=) windowsA (fromJust . PL.find initialWindow)
       showMatchings = showMatchingsOf =<< withBuffer elemsB
-      showMatchingsOf userInput = withEditor . printStatus =<< fmap withDefaultStyle (getHint userInput)
+      showMatchingsOf userInput =
+        withEditor . printStatus =<< fmap withDefaultStyle (getHint userInput)
       withDefaultStyle msg = (msg, defaultStyle)
+      -- typing = withEditor . onTyping =<< withBuffer elemsB
+      typing = onTyping =<< withBuffer elemsB
+
       innerAction = do
-        lineString <- withEditor $ do historyFinishGen prompt (withBuffer0 elemsB)
-                                      lineString <- withBuffer0 elemsB
-                                      closeMinibuffer
-                                      switchToBufferE initialBuffer
-                                      -- The above ensures that the action is performed on the buffer
-                                      -- that originated the minibuffer.
-                                      return lineString
+        lineString <- withEditor $ do
+          historyFinishGen prompt (withBuffer0 elemsB)
+          lineString <- withBuffer0 elemsB
+          closeMinibuffer
+          switchToBufferE initialBuffer
+          -- The above ensures that the action is performed on the buffer
+          -- that originated the minibuffer.
+          return lineString
         act lineString
+
       up   = historyMove prompt 1
       down = historyMove prompt (-1)
 
-      rebindings = choice [oneOf [spec KEnter, ctrl $ char 'm'] >>! innerAction,
-                           oneOf [spec KUp,    meta $ char 'p'] >>! up,
-                           oneOf [spec KDown,  meta $ char 'n'] >>! down,
-                           oneOf [spec KTab,   ctrl $ char 'i'] >>! completionFunction completer >>! showMatchings,
-                           ctrl (char 'g')                     ?>>! closeMinibuffer]
-  showMatchingsOf ""
-  withEditor $ do 
-      historyStartGen prompt
-      discard $ spawnMinibufferE (prompt ++ " ") (\bindings -> rebindings <|| (bindings >> write showMatchings))
-      withBuffer0 $ replaceBufferContent proposal
+      rebindings =
+        choice [oneOf [spec KEnter, ctrl $ char 'm'] >>! innerAction,
+                oneOf [spec KUp,    meta $ char 'p'] >>! up,
+                oneOf [spec KDown,  meta $ char 'n'] >>! down,
+                oneOf [spec KTab,   ctrl $ char 'i']
+                  >>! completionFunction completer >>! showMatchings,
+                ctrl (char 'g')                     ?>>! closeMinibuffer]
 
+  showMatchingsOf ""
+  withEditor $ do
+      historyStartGen prompt
+      void $ spawnMinibufferE (prompt ++ " ")
+        (\bindings -> rebindings <|| (bindings >> write showMatchings
+                                      >> write typing))
+      withBuffer0 $ replaceBufferContent (replaceShorthands proposal)
 
 -- | Open a minibuffer, given a finite number of suggestions.
 withMinibufferFin :: String -> [String] -> (String -> YiM ()) -> YiM ()
-withMinibufferFin prompt possibilities act 
-    = withMinibufferGen "" hinter prompt completer (act . best)
-      where 
+withMinibufferFin prompt possibilities act
+    = withMinibufferGen "" hinter prompt completer
+      (const $ return ()) (act . best)
+      where
         -- The function for returning the hints provided to the user underneath
         -- the input, basically all those that currently match.
         hinter s = return $ match s
@@ -146,7 +172,7 @@ withMinibufferFin prompt possibilities act
         -- If the string matches completely then we take that
         -- otherwise we just take the first match.
         best s
-          | any (== s) matches = s
+          | s `elem` matches = s
           | null matches       = s
           | otherwise          = head matches
           where matches = match s
@@ -175,8 +201,7 @@ class Promptable a where
     getMinibuffer _ = withMinibufferFree
 
 doPrompt :: forall a. Promptable a => (a -> YiM ()) -> YiM ()
-doPrompt act = getMinibuffer witness (getPrompt witness ++ ":") $ 
-                     \string -> act =<< getPromptedValue string
+doPrompt act = getMinibuffer witness (getPrompt witness ++ ":") (act <=< getPromptedValue)
     where witness = error "Promptable argument should not be accessed"
           witness :: a
 
@@ -185,7 +210,7 @@ instance Promptable String where
     getPrompt _ = "String"
 
 instance Promptable Char where
-    getPromptedValue x = if length x == 0 then error "Please supply a character." 
+    getPromptedValue x = if null x then error "Please supply a character."
                          else return $ head x
     getPrompt _ = "Char"
 
@@ -198,10 +223,10 @@ getPromptedValueList :: [(String,a)] -> String -> YiM a
 getPromptedValueList vs s = maybe (error "Invalid choice") return (lookup s vs)
 
 getMinibufferList :: [(String,a)] -> a -> String -> (String -> YiM ()) -> YiM ()
-getMinibufferList vs _ prompt act = withMinibufferFin prompt (fmap fst vs) act
+getMinibufferList vs _ prompt = withMinibufferFin prompt (fmap fst vs)
 
 enumAll :: (Enum a, Bounded a, Show a) => [(String, a)]
-enumAll = (fmap (\v -> (show v, v)) [minBound..])
+enumAll = fmap (\v -> (show v, v)) [minBound..]
 
 instance Promptable Direction where
     getPromptedValue = getPromptedValueList enumAll
@@ -250,21 +275,21 @@ instance Promptable AnyMode where
 instance Promptable BufferRef where
     getPrompt _ = "Buffer"
     getPromptedValue = withEditor . getBufferWithNameOrCurrent
-    getMinibuffer _ prompt act = do 
+    getMinibuffer _ prompt act = do
       bufs <- matchingBufferNames ""
       withMinibufferFin prompt bufs act
 
 -- | Returns all the buffer names.
 matchingBufferNames :: String -> YiM [String]
 matchingBufferNames _ = withEditor $ do
-  p <- gets commonNamePrefix 
+  p <- gets commonNamePrefix
   bs <- gets bufferSet
   return $ fmap (shortIdentString p) bs
 
 
 instance (YiAction a x, Promptable r) => YiAction (r -> a) x where
     makeAction f = YiA $ doPrompt (runAction . makeAction . f)
-                   
+
 
 -- | Tag a type with a documentation
 newtype (:::) t doc = Doc {fromDoc :: t} deriving (Eq, Typeable, Num, IsString)
@@ -278,7 +303,7 @@ instance (DocType doc, Promptable t) => Promptable (t ::: doc) where
 
 class DocType t where
     -- | What to prompt the user when asked this type?
-    typeGetPrompt :: t -> String 
+    typeGetPrompt :: t -> String
 
 data LineNumber
 instance DocType LineNumber where
@@ -288,21 +313,18 @@ data ToKill
 instance DocType ToKill where
     typeGetPrompt _ = "kill buffer"
 
-    
+
 data RegexTag deriving Typeable
 instance DocType RegexTag where
     typeGetPrompt _ = "Regex"
-    
+
 data FilePatternTag deriving Typeable
 instance DocType FilePatternTag where
     typeGetPrompt _ = "File pattern"
 
-newtype CommandArguments = CommandArguments [String] 
+newtype CommandArguments = CommandArguments [String]
     deriving Typeable
 
 instance Promptable CommandArguments where
     getPromptedValue = return . CommandArguments . words
     getPrompt _ = "Command arguments"
-    
-
-

@@ -24,7 +24,7 @@ import Control.Exc          (ignoringException)
 -- | Removes `/./` `//` and `/../` sequences from path,
 -- doesn't follow symlinks
 normalisePath :: FilePath -> IO FilePath
-normalisePath path = do 
+normalisePath path = do
   absPath <- makeAbsolute path
   return $ foldl combinePath "/" $ splitPath absPath
 
@@ -40,16 +40,17 @@ canonicalizePath path = do
 #endif
 
 -- | Dereferences symbolic links until regular
--- file/directory/something_else appears 
+-- file/directory/something_else appears
 expandSym :: FilePath -> IO FilePath
 expandSym fpath = do
   -- System.Posix.Files.getFileStatus dereferences symlink before
   -- checking its status, so it's useless here
   deref <- ignoringException (Just <$> readSymbolicLink fpath)
   case deref of
-    Just slink -> if isAbsolute slink then expandSym slink
-                  else expandSym $ foldl combinePath (takeDirectory fpath) $ splitPath slink
-    Nothing -> return fpath 
+    Just slink -> expandSym (if isAbsolute slink
+                    then slink
+                    else foldl combinePath (takeDirectory fpath) $ splitPath slink)
+    Nothing -> return fpath
 
 -- | Make a path absolute.
 makeAbsolute :: FilePath -> IO FilePath
@@ -76,7 +77,7 @@ replaceUpTo srch rep as =
 --   somepath//someotherpath is equivalent to /someotherpath
 --   somepath/~/someotherpath is equivalent to ~/someotherpath
 replaceShorthands :: FilePath -> FilePath
-replaceShorthands = replaceUpTo "/~" "~" . replaceUpTo "//" "/" 
+replaceShorthands = replaceUpTo "/~" "~/" . replaceUpTo "//" "/"
 
 -- | Splits path into parts by path separator
 splitPath :: FilePath -> [String]

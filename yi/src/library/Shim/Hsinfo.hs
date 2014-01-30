@@ -16,6 +16,7 @@ import qualified Shim.GhcCompat as GhcCompat
 
 import Control.Applicative
 import Control.Monad.State
+import Control.Arrow ((***))
 import Data.List ( isPrefixOf, find, nubBy, sort, (\\) )
 import Data.Maybe
 import System.Directory
@@ -27,38 +28,29 @@ import qualified Data.Map as M
 
 import qualified GHC
 
-#if __GLASGOW_HASKELL__ >= 610
-import GHC hiding ( load, getSession, getModuleGraph, getSessionDynFlags, 
+import GHC hiding ( load, getSession, getModuleGraph, getSessionDynFlags,
                     findModule, getRdrNamesInScope, compileExpr, exprType,
                     getPrintUnqual, setSessionDynFlags )
-#else
-import GHC hiding ( load, newSession, (<.>) )
-#endif
-
 import Outputable
 import Panic
 import UniqFM ( eltsUFM )
 import Packages ( pkgIdMap, exposed, exposedModules )
 import Id
 import Name
-#if __GLASGOW_HASKELL__ >= 610
-import HscTypes hiding ( getSession ) 
-#else
-import HscTypes
-#endif
+import HscTypes hiding ( getSession )
 import SrcLoc
 import PprTyThing
 import StringBuffer ( stringToStringBuffer, StringBuffer )
 import HeaderInfo ( getOptions )
 import DriverPhases ( Phase(..), startPhase )
 import Yi.Debug (logPutStrLn)
-import Distribution.Text 
+import Distribution.Text
 import Distribution.Simple ( pkgName )
 import Distribution.Compiler ( CompilerFlavor (..) )
 import Distribution.Simple.GHC
 import Distribution.Simple.Configure
 import Distribution.Verbosity
-import Distribution.PackageDescription 
+import Distribution.PackageDescription
   ( buildDepends, PackageDescription, BuildInfo,
     library, executables, hsSourceDirs, extensions, includeDirs, extraLibs,
     libBuildInfo, buildInfo, options, hcOptions, modulePath, allBuildInfo,
@@ -75,18 +67,12 @@ import qualified GHC.Paths
 
 ghcInit :: IO Session
 ghcInit = do
-#if __GLASGOW_HASKELL__ == 606
-  ses <- GhcCompat.newSession JustTypecheck (Just ghclibdir)
-#else
   ses <- GhcCompat.newSession (Just ghclibdir)
-#endif
   dflags0 <- GhcCompat.getSessionDynFlags ses
   let ignore _ _ _ _ = return ()
       dflags1 = dflags0{ hscTarget = HscNothing,
                          verbosity = 1,
-#if __GLASGOW_HASKELL__ > 606
                          ghcLink    = NoLink,
-#endif
                          log_action = ignore}
   GhcCompat.setSessionDynFlags ses dflags1
   return ses
@@ -107,7 +93,7 @@ getCabalOpts sourcefile = do
       logInfo $ show (allBuildInfo pkg)
       logInfo $ show bi
       logInfo $ show exe
-              
+
       let pref = buildDir lbi
 
       return $ case exe of
@@ -124,9 +110,9 @@ getCabalOpts sourcefile = do
 ghcSetDir :: FilePath -> SHM ()
 ghcSetDir projectroot = do
   ses <- getSession
-  oldDir <- io $ getCurrentDirectory
+  oldDir <- io getCurrentDirectory
   io $ setCurrentDirectory projectroot
-  newDir <- io $ getCurrentDirectory
+  newDir <- io getCurrentDirectory
   when (newDir /= oldDir) $
     io $ GhcCompat.workingDirectoryChanged ses
 
@@ -160,11 +146,7 @@ bufferNeedsPreprocessing sourcefile source = do
   sourcebuf <- io $ stringToStringBuffer source
   ses <- getSessionFor sourcefile
   dflags <- io $ GhcCompat.getSessionDynFlags ses
-#if __GLASGOW_HASKELL__ >= 610
   let local_opts = map unLoc (getOptions dflags sourcebuf sourcefile)
-#else
-  let local_opts = map unLoc (getOptions sourcebuf sourcefile)
-#endif
   (dflags', _) <- io $ GhcCompat.parseDynamicFlags ses dflags local_opts
   let src_ext = takeExtension sourcefile
       needs_preprocessing
@@ -213,16 +195,12 @@ load sourcefile store source = do
            do logInfo $ "compBuffer for "++ sourcefile++" replaced"
               id_data <- io$ getIdData ses
               m <- io $ findModuleInFile ses sourcefile
-#if __GLASGOW_HASKELL__ > 606
               cm0 <- io $ GhcCompat.checkModule ses (moduleName m) False
-#else
-              cm0 <- io $ GhcCompat.checkModule ses $ moduleName m
-#endif
               h <- io $ hashSource sourcefile source
               let cm = do {c <- cm0; return (h, c)}
               storeFileInfo sourcefile cres cm id_data
 
-load' :: FilePath -> Maybe String -> SHM (SuccessFlag,Session) 
+load' :: FilePath -> Maybe String -> SHM (SuccessFlag,Session)
 load' sourcefile source = do
   source' <- addTime source
   ses <- getSessionFor sourcefile
@@ -230,11 +208,7 @@ load' sourcefile source = do
   logAction <- getCompLogAction
   let dflags1 = dflags0{ log_action = logAction, flags = Opt_ForceRecomp : flags dflags0 }
   io $ GhcCompat.setSessionDynFlags ses dflags1
-#if __GLASGOW_HASKELL__ >= 610
   io $ GhcCompat.setTargets ses [Target (TargetFile sourcefile Nothing) False source']
-#else
-  io $ GhcCompat.setTargets ses [Target (TargetFile sourcefile Nothing) source']
-#endif
   loadResult <- io $ GhcCompat.load ses LoadAllTargets
   case loadResult of
        Succeeded -> do -- GHC takes care of setting the right context
@@ -246,7 +220,7 @@ load' sourcefile source = do
          return (Failed,ses)
 
 addTime :: Maybe String -> SHM (Maybe (StringBuffer, ClockTime))
-addTime (Just s) = do now <- io $ getClockTime
+addTime (Just s) = do now <- io getClockTime
                       sb <- io $ stringToStringBuffer s
                       return $ Just (sb,now)
 addTime Nothing = return Nothing
@@ -260,8 +234,8 @@ getSessionFor sourcefile = do
       getCabalSession opts cabalfile
     Nothing -> do
       ses <- getSession
-      logInfo $ concat ["No cabal file found. ",
-                        "Using default options and current directory"]
+      logInfo ("No cabal file found. " ++
+               "Using default options and current directory")
       ghcSetDir $ dropFileName sourcefile
       return ses
 
@@ -285,7 +259,7 @@ getCabalSession opts cabalfile = do
   mses <- lookupSession cabalfile
   ses <- case mses of
            Just ses -> return ses
-           Nothing  -> do ses <- io $ ghcInit
+           Nothing  -> do ses <- io ghcInit
                           addSession cabalfile ses
                           return ses
   logInfo $ concat ["Using options ", unSplit ',' opts,
@@ -297,13 +271,13 @@ getCabalSession opts cabalfile = do
   return ses
 
 storeFileInfo :: FilePath -> CompilationResult -> Maybe CachedMod -> IdData -> SHM ()
-storeFileInfo sourcefile compile_res cm id_data = do
+storeFileInfo sourcefile compile_res cm id_data =
   addCompBuffer sourcefile id_data compile_res cm
 
 getIdData :: Session -> IO IdData
 getIdData ses = do
   things <- GhcCompat.getNamesInScope ses >>= mapM (GhcCompat.lookupName ses)
-  return [(s $ nameOccName $ idName ident, s $ idType ident) 
+  return [(s $ nameOccName $ idName ident, s $ idType ident)
               | Just(AnId ident) <- things]
       where s x = showSDocUnqual $ ppr x
 
@@ -320,23 +294,18 @@ findModulesPrefix sourcefile pref = do
 
 allExposedModules :: DynFlags -> [ModuleName]
 allExposedModules dflags =
-#if __GLASGOW_HASKELL__ >= 610
   concatMap Packages.exposedModules (filter exposed (eltsUFM pkg_db))
-#else
-  map GHC.mkModuleName (concatMap Packages.exposedModules
-                       (filter exposed (eltsUFM pkg_db)))
-#endif
  where pkg_db = pkgIdMap (pkgState dflags)
 
 findIdPrefix :: FilePath -> String -> SHM [(String, String)]
 findIdPrefix sourcefile pref = do
   l0 <- M.lookup sourcefile `fmap` getCompBuffer
   case l0 of
-    Just (_,l,_) -> return . (filterPrefix pref) $ l
+    Just (_,l,_) -> return . filterPrefix pref $ l
     Nothing -> do
       load sourcefile True Nothing
       l1 <- M.lookup sourcefile `fmap` getCompBuffer
-      maybe (return []) (return . (filterPrefix pref) . snd3) l1
+      (return . maybe [] (filterPrefix pref . snd3)) l1
 
 
 findTypeOfName :: Session -> String -> SHM String
@@ -348,7 +317,7 @@ findTypeOfName ses n = do
  where showForUser doc = do
          unqual <- io $ GhcCompat.getPrintUnqual ses
          return $ showSDocForUser unqual doc
- 
+
 evaluate :: Session -> String -> SHM String
 evaluate ses n = do
   maybe_hvalue <- io $ GhcCompat.compileExpr ses ("show (" ++ n ++ ")")
@@ -360,9 +329,9 @@ getModuleExports :: FilePath -> String -> String -> SHM IdData
 getModuleExports sourcefile0 modname pref = do
   ses <- getSessionFor sourcefile0
   let currentmod = "AHJEXLJLLKJIUOHGJ"
-      sourcefile = (dropFileName sourcefile0) </> currentmod ++ ".hs"
+      sourcefile = dropFileName sourcefile0 </> currentmod ++ ".hs"
       minSrc = unlines ["module "++currentmod++" where",
-                        "import Prelude ()",
+                        "",
                         "import "++modname]
   load sourcefile False (Just minSrc)
   modl <- io $ GhcCompat.findModule ses (GHC.mkModuleName modname) Nothing
@@ -377,14 +346,11 @@ getModuleExports sourcefile0 modname pref = do
     Just mod_info -> do
       let names = modInfoExports mod_info
       things <- io $ forM names
-                       (\n -> ((,) n) `fmap` GhcCompat.lookupName ses n)
+                       (\n -> (,) n `fmap` GhcCompat.lookupName ses n)
       return
         $ filterPrefix pref
-        $ map (\(n,t) ->
-                 (showSDocForUser unqual . ppr $ n,
-                  maybe ""
-                    (showSDocForUser unqual . pprTyThingInContext False)
-                    t))
+        $ map ((showSDocForUser unqual . ppr) ***
+               maybe "" (showSDocForUser unqual . pprTyThingInContext False))
               things
 
 findDefinition :: FilePath -> Int -> Int -> Maybe String -> SHM SrcLoc
@@ -393,24 +359,18 @@ findDefinition sourcefile line col source = do
   case findExprInCheckedModule line col cm of
     FoundName name -> return $ nameSrcLoc name
     FoundId ident  -> return $ nameSrcLoc (getName ident)
-    _              -> return $ noSrcLoc
+    _              -> return   noSrcLoc
 
-#if __GLASGOW_HASKELL__ > 606
 pprExplicitForAlls :: SHM Bool
 pprExplicitForAlls = do
   s <- getSession
   dflags <- io $ GhcCompat.getSessionDynFlags s
   return$ dopt Opt_PrintExplicitForalls dflags
-#endif
 
 findTypeOfPos :: FilePath -> Int -> Int -> Maybe String -> SHM String
 findTypeOfPos sourcefile line col source = do
   (cm,ses) <- checkModuleCached sourcefile source
-#if __GLASGOW_HASKELL__ >= 610
   let modInfo = GHC.moduleInfo cm
-#else
-  let Just modInfo = GHC.checkedModuleInfo cm
-#endif
   unqual <- io$ GhcCompat.getPrintUnqual ses
   case findExprInCheckedModule line col cm of
     FoundName name -> do
@@ -418,9 +378,9 @@ findTypeOfPos sourcefile line col source = do
       case mb_tyThing of
             Just tyThing -> return $! showSDocForUser unqual
                               (pprTyThingInContextLoc True tyThing)
-            Nothing      -> return $ "<not found>"
+            Nothing      -> return "<not found>"
     FoundId ident ->  return $ pprIdent ident
-    _ -> return $ "<not found>"
+    _ -> return "<not found>"
 
 --------------------------------------------------------------
 -- utility functions
@@ -477,10 +437,10 @@ testFilename :: String
 testFilename = "/tmp/ShimTest.hs"
 
 assertLEq :: (Show a, Monad m, Ord a) => [a] -> [a] -> m ()
-assertLEq expected got = do
-  unless ((sort expected)==(sort got)) $
-    error $ "\nexpected: " ++ (show expected) ++ "\ngot:      " ++ (show got)
-            ++ "\ndiff: " ++ (show $ (expected \\ got) ++ (got \\ expected))
+assertLEq expected got =
+  unless (sort expected == sort got) $
+    error $ "\nexpected: " ++ show expected ++ "\ngot:      " ++ show got
+            ++ "\ndiff: " ++ show ((expected \\ got) ++ (got \\ expected))
 
 t1 :: IO ()
 t1 = do
@@ -497,9 +457,9 @@ t_findIdPrefix source pref expected = do
 
 t2 :: IO ()
 t2 = t_findIdPrefix testSource "from"
-       ([("fromTest","Integer"),
-         ("fromJust","Maybe a -> a"),
-         ("fromMaybe","a -> Maybe a -> a")])
+       [("fromTest","Integer"),
+        ("fromJust","Maybe a -> a"),
+        ("fromMaybe","a -> Maybe a -> a")]
 
 t3 :: IO ()
 t3 = t_findIdPrefix testSource "someF" [("someFun","Integer")]

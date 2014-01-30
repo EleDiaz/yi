@@ -1,5 +1,3 @@
-{-# LANGUAGE DeriveDataTypeable #-}
-
 -- Handles indentation in the keymaps. Includes:
 --  * (TODO) Auto-indentation to the previous lines indentation
 --  * Tab-expansion
@@ -7,15 +5,14 @@
 
 module Yi.Buffer.Indent where
 
+import Control.Applicative
 import Yi.Buffer.Basic
 import Yi.Buffer.Misc
 import Yi.Buffer.HighLevel
-import Yi.Prelude
 import Yi.Buffer.Normal
 import Yi.Buffer.Region
-import Prelude ()
 import Data.Char
-import Data.List (span, length, sort, nub, break, reverse, filter, takeWhile, dropWhile)
+import Data.List (sort, nub)
 import Yi.String
 
 {- |
@@ -43,8 +40,7 @@ indentSettingsB = withModeB $ return . modeIndentSettings
   specialise 'autoIndentHelperB' on their own.
 -}
 autoIndentB :: IndentBehaviour -> BufferM ()
-autoIndentB indentBehave = do
-  autoIndentHelperB fetchPreviousIndentsB indentsOfString indentBehave
+autoIndentB = autoIndentHelperB fetchPreviousIndentsB indentsOfString
   where
   -- Returns the indentation hints considering the given
   -- string as the line above the current one.
@@ -53,7 +49,7 @@ autoIndentB indentBehave = do
   --     The indent of the given string plus two
   --     The offset of the last open bracket if any in the line.
   indentsOfString :: String -> BufferM [Int]
-  indentsOfString input = 
+  indentsOfString input =
     do indent       <- indentOfB input
        bracketHints <- lastOpenBracketHint input
        indentSettings <- indentSettingsB
@@ -76,31 +72,31 @@ autoIndentB indentBehave = do
   the second argument, in particular we commonly wish to have the
   last opening bracket of the previous line as well as its indent.
 -}
-autoIndentHelperB :: BufferM [ Int ] 
+autoIndentHelperB :: BufferM [ Int ]
                   -- ^ Action to fetch hints from previous lines
                  -> (String -> BufferM [ Int ])
                  -- ^ Action to calculate hints from previous line
                  -> IndentBehaviour
-                 -- ^ Sets the indent behaviour, 
+                 -- ^ Sets the indent behaviour,
                  -- see 'Yi.Buffer.IndentBehaviour' for a description
                  -> BufferM ()
 autoIndentHelperB getUpwards getPrevious indentBehave =
   do upwardHints   <- savingExcursionB getUpwards
      previousLine  <- getNextLineB Backward
      previousHints <- getPrevious previousLine
-     let allHints = (upwardHints ++ previousHints)
+     let allHints = upwardHints ++ previousHints
      cycleIndentsB indentBehave allHints
 
 -- | Cycles through the indentation hints. It does this without
 -- requiring to set/get any state. We just look at the current
 -- indentation of the current line and moving to the largest
--- indent that is 
+-- indent that is
 cycleIndentsB :: IndentBehaviour -> [Int] -> BufferM ()
 cycleIndentsB _ [] = return ()
 cycleIndentsB indentBehave indents =
     do currentLine   <- readLnB
        currentIndent <- indentOfB currentLine
-       indentToB $ chooseIndent currentIndent (sort $ nub $ indents)
+       indentToB $ chooseIndent currentIndent (sort $ nub indents)
   where
   -- Is the function to choose the indent from the given current
   -- indent to the given list of indentation hints.
@@ -112,7 +108,7 @@ cycleIndentsB indentBehave indents =
       IncreaseOnly  -> chooseIncreaseOnly
       DecreaseOnly  -> chooseDecreaseOnly
 
-  
+
 
   -- Choose the indentation hint which is one more than the current
   -- indentation hint unless the current is the largest or larger than
@@ -124,7 +120,7 @@ cycleIndentsB indentBehave indents =
     -- we will go to the first of below which will be the smallest
     -- indentation hint, if above is not null then we are moving to
     -- the indentation hint which is one above the current.
-    head $ (above ++ below)
+    head (above ++ below)
     where
     (below, above) = span (<= currentIndent) hints
 
@@ -141,7 +137,7 @@ cycleIndentsB indentBehave indents =
     -- go to the largest indentation, if below is not null
     -- we go to the largest indentation which is *not* higher
     -- than the current one.
-    last $ (above ++ below)
+    last (above ++ below)
     where
     (below, above) = span (< currentIndent) hints
 
@@ -162,8 +158,8 @@ cycleIndentsB indentBehave indents =
   the outer scope.
 -}
 fetchPreviousIndentsB :: BufferM [Int]
-fetchPreviousIndentsB = 
-     -- Move up one line, 
+fetchPreviousIndentsB =
+     -- Move up one line,
   do moveOffset <- lineMoveRel (-1)
      line       <- readLnB
      indent     <- indentOfB line
@@ -194,7 +190,7 @@ autoIndentWithKeywordsB :: [ String ]   -- ^ Keywords to act as hints
                         -> IndentBehaviour
                         -> BufferM ()
 autoIndentWithKeywordsB firstKeywords secondKeywords =
-  autoIndentHelperB fetchPreviousIndentsB getPreviousLineHints 
+  autoIndentHelperB fetchPreviousIndentsB getPreviousLineHints
   where
   getPreviousLineHints :: String -> BufferM [ Int ]
   getPreviousLineHints input =
@@ -253,7 +249,7 @@ lastOpenBracketHint input =
     | isClosing c           = getOpen (i + 1) rest
       -- If it is just a normal character forget about it and move on.
     | otherwise             = getOpen i rest
-            
+
   isOpening :: Char -> Bool
   isOpening '(' = True
   isOpening '[' = True
@@ -289,7 +285,7 @@ keywordHints keywords =
                                           getHints (i + spaceSize) rest
     -- If there are no white space characters check if we are looking
     -- at a keyword and if so add it as a hint
-    | any (== initNonWhite) keywords = (i :) <$> whiteRestHints
+    | initNonWhite `elem` keywords = (i :) <$> whiteRestHints
     -- Finally we just continue with the tail.
     | otherwise                      = whiteRestHints
     where
@@ -325,8 +321,8 @@ keywordAfterHints keywords =
                                        getHints (i + indent) nonWhite
     -- If there is a keyword at the current position and
     -- the keyword isn't the last thing on the line.
-    | any (== key) keywords
-      && (not $ null afterwhite)  =  do indent    <- spacingOfB white
+    | key `elem` keywords
+      && not (null afterwhite)    =  do indent    <- spacingOfB white
                                         let hint  =  i + length key + indent
                                         tailHints <- getHints hint afterwhite
                                         return $ hint : tailHints
@@ -359,7 +355,7 @@ indentOfB = spacingOfB . takeWhile isSpace
     white space and the indentation settings.
 -}
 spacingOfB :: String -> BufferM Int
-spacingOfB text = 
+spacingOfB text =
   do indentSettings <- indentSettingsB
      let spacingOfChar :: Char -> Int
          spacingOfChar '\t' = tabSize indentSettings
@@ -400,7 +396,7 @@ newlineAndIndentB = newlineB >> indentAsPreviousB
 -- | Set the padding of the string to newCount, filling in tabs if
 -- expandTabs is set in the buffers IndentSettings
 rePadString :: IndentSettings -> Int -> String -> String
-rePadString indentSettings newCount input 
+rePadString indentSettings newCount input
     | newCount <= 0 = rest
     | expandTabs indentSettings = replicate newCount ' ' ++ rest
     | otherwise = tabs ++ spaces ++ rest
@@ -412,7 +408,7 @@ rePadString indentSettings newCount input
 -- | shifts right (or left if num is negative) num times, filling in tabs if
 -- expandTabs is set in the buffers IndentSettings
 indentString :: IndentSettings -> Int -> String -> String
-indentString indentSettings numOfShifts input = rePadString indentSettings newCount input 
+indentString indentSettings numOfShifts input = rePadString indentSettings newCount input
     where (indents,_) = span isSpace input
           countSpace '\t' = tabSize indentSettings
           countSpace _ = 1 -- we'll assume nothing but tabs and spaces
@@ -422,7 +418,7 @@ indentString indentSettings numOfShifts input = rePadString indentSettings newCo
 shiftIndentOfRegion :: Int -> Region -> BufferM ()
 shiftIndentOfRegion shiftCount region = do
     indentSettings <- indentSettingsB
-    modifyRegionB (mapLines $ (indentString indentSettings shiftCount `unless` null)) region
+    modifyRegionB (mapLines (indentString indentSettings shiftCount `unless` null)) region
     moveTo $ regionStart region
     firstNonSpaceB
   where (f `unless` c) x = if c x then x else f x

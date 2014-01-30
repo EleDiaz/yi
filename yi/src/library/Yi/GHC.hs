@@ -1,4 +1,4 @@
-{-# LANGUAGE GeneralizedNewtypeDeriving, DeriveDataTypeable, StandaloneDeriving #-}
+{-# LANGUAGE DeriveDataTypeable #-}
 module Yi.GHC where
 
 import Control.Concurrent
@@ -11,28 +11,28 @@ import Data.Maybe
 import ErrUtils
 import GHC
 import Outputable
-import Prelude ()
+
 import Shim.Hsinfo
 import Shim.SHM hiding (io)
 import Yi.Dynamic
 import Yi.Editor
 import Yi.Keymap
-import Yi.Prelude hiding ((<>))
+ hiding ((<>))
 import qualified Data.List.PointedList.Circular as PL
 import qualified Data.Map as M
 import qualified Yi.Editor as Editor
 
 newShim :: YiM (MVar ShimState)
 newShim = do
-    session <- io $ ghcInit
+    session <- io ghcInit
 
     r <- asks yiVar
     cfg <- asks yiConfig
-    let logMsg msgSeverity msgSrcSpan style msg = 
-           unsafeWithEditor cfg r $ do                             
+    let logMsg msgSeverity msgSrcSpan style msg =
+           unsafeWithEditor cfg r $ do
              let note = CompileNote msgSeverity msgSrcSpan style msg
-             modA notesA (Just . maybe (PL.singleton note) (PL.insertRight note))
-             printMsg ('\n':show ((mkLocMessage msgSrcSpan msg) style))
+             (%=) notesA (Just . maybe (PL.singleton note) (PL.insertRight note))
+             printMsg ('\n':show (mkLocMessage msgSrcSpan msg style))
 
 
     io $ newMVar ShimState
@@ -44,17 +44,17 @@ newShim = do
 
 getShim :: YiM (MVar ShimState)
 getShim = do
-  r <- withEditor $ getA maybeShimA
+  r <- withEditor $ use maybeShimA
   case r of
     Just x -> return x
     Nothing -> do x <- newShim
-                  withEditor $ putA maybeShimA (Just x)
+                  withEditor $ assign maybeShimA (Just x)
                   return x
 
 withShim :: SHM a -> YiM a
 withShim f = do
   r <- getShim
-  liftIO $ do e <- takeMVar r
+  liftBase $ do e <- takeMVar r
               (a,e') <- runStateT f e
               putMVar r e'
               return a
@@ -62,7 +62,7 @@ withShim f = do
 runShimThread :: SHM () -> YiM ThreadId
 runShimThread f = do
   r <- getShim
-  (liftIO . forkOS) $
+  (liftBase . forkOS) $
            do e <- takeMVar r
               (a,e') <- runStateT f e
               putMVar r e'
@@ -87,21 +87,20 @@ data CompileNote = CompileNote {severity :: Severity,
 
 
 instance Show CompileNote where
-    show n = show $
-               (hang (ppr (srcSpan n) <> colon) 4  (message n)) (pprStyle n)
+    show n = show $ hang (ppr (srcSpan n) <> colon) 4 (message n) (pprStyle n)
 
 
 type T = (Maybe (PL.PointedList CompileNote))
 newtype ShimNotes = ShimNotes { fromShimNotes :: T }
     deriving Typeable
 
-instance Initializable ShimNotes where
-    initial = ShimNotes Nothing
+instance Default ShimNotes where
+    def = ShimNotes Nothing
 
 
 
 notesA :: Accessor Editor T
-notesA =  (accessor fromShimNotes (\x (ShimNotes _) -> ShimNotes x)) 
-          . dynamicValueA . dynamicA 
+notesA =  accessor fromShimNotes (\x (ShimNotes _) -> ShimNotes x)
+          . dynamicValueA . dynamicA
 
 

@@ -2,10 +2,11 @@ module Yi.Keymap.Vim2.Ex.Commands.Quit
     ( parse
     ) where
 
-import Prelude ()
-import Yi.Prelude
+import Control.Applicative
+import Control.Monad
+import Control.Lens
 
-import Data.Either (either)
+import Data.Foldable (find)
 
 import qualified Text.ParserCombinators.Parsec as P
 
@@ -16,11 +17,12 @@ import Yi.File
 import Yi.Keymap
 import Yi.Keymap.Vim2.Ex.Types
 import qualified Yi.Keymap.Vim2.Ex.Commands.Common as Common
+import Yi.Monad
 
 parse :: String -> Maybe ExCommand
 parse = Common.parse $ do
     ws <- P.many (P.char 'w')
-    discard $ P.try ( P.string "quit") <|> P.string "q"
+    void $ P.try ( P.string "quit") <|> P.string "q"
     as <- P.many (P.try ( P.string "all") <|> P.string "a")
     bangs <- P.many (P.char '!')
     return $! quit (not $ null ws) (not $ null bangs) (not $ null as)
@@ -28,10 +30,10 @@ parse = Common.parse $ do
 quit :: Bool -> Bool -> Bool -> ExCommand
 quit w f a = Common.impureExCommand {
     cmdShow = concat
-        [ (if w then "w" else "")
+        [ if w then "w" else ""
         , "quit"
-        , (if a then "all" else "")
-        , (if f then "!" else "")
+        , if a then "all" else ""
+        , if f then "!" else ""
         ]
   , cmdAction = YiA $ action w f a
   }

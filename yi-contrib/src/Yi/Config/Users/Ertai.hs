@@ -7,19 +7,20 @@ import qualified Yi.Mode.Haskell as Haskell
 import qualified Yi.Syntax.Haskell as Haskell
 import qualified Yi.Lexer.Haskell as Haskell
 import qualified Yi.Syntax.Strokes.Haskell as Haskell
-import Yi.Prelude
-import Prelude (map)
-import System.Environment
-import Data.List (isPrefixOf, reverse, length)
+import Data.List (isPrefixOf)
 import Data.Maybe
+import Data.Foldable (Foldable)
 import Yi.Char.Unicode (greek, symbols)
 import Control.Monad (replicateM_)
+import Control.Applicative
+import Control.Lens
 import Yi.Keymap.Keys (char,(?>>!),(>>!))
 import Yi.Lexer.Alex (Tok)
 import qualified Yi.Syntax.Tree as Tree
 import Yi.Hoogle
 import Yi.Buffer
 import Yi.Keymap.Vim (viWrite, v_ex_cmds, v_top_level, v_ins_char, v_opts, tildeop, savingInsertStringB, savingDeleteCharB, exCmds, exHistInfixComplete')
+import Yi.Keymap (withModeY)
 import Yi.MiniBuffer (matchingBufferNames)
 import qualified Yi.Keymap.Vim as Vim
 
@@ -38,6 +39,7 @@ myModetable = [
                AnyMode . haskellModeHooks . removeAnnots $ Haskell.fastMode
               ]
 
+type Endom a = a -> a
 
 haskellModeHooks :: (Foldable f) => Endom (Mode (f Haskell.TT))
 haskellModeHooks mode =
@@ -50,7 +52,7 @@ haskellModeHooks mode =
         -- modeGetStrokes = \_ _ _ _ -> [],
         modeName = "my " ++ modeName mode,
         -- example of Mode-local rebinding
-        modeKeymap = topKeymapA ^:
+        modeKeymap = topKeymapA %~
             ((char '\\' ?>> choice [char 'l' ?>>! Haskell.ghciLoadBuffer,
                                     char 'z' ?>>! Haskell.ghciGet,
                                     char 'h' ?>>! hoogle,
@@ -71,7 +73,7 @@ main = do args <- getArgs
 config :: Config
 config = defaultVimConfig { modeTable = fmap (onMode prefIndent) (myModetable ++ modeTable defaultVimConfig)
                           , defaultKm = Vim.mkKeymap extendedVimKeymap
-                          , startActions = startActions defaultVimConfig ++ [makeAction (maxStatusHeightA %= 10 :: EditorM ())]
+                          , startActions = startActions defaultVimConfig ++ [makeAction (maxStatusHeightA .= 10 :: EditorM ())]
                           }
 
 -- Set soft tabs of 4 spaces in width.
@@ -97,7 +99,7 @@ extendedVimKeymap = Vim.defKeymap `override` \super self -> super
     { v_top_level = (deprioritize >> v_top_level super)
                     <|> (char ',' ?>>! viWrite)
                     <|> ((events $ map char "\\u") >>! unicodifySymbols)
-                    <|> ((events $ map char "\\c") >>! withModeB modeToggleCommentSelection)
+                    <|> ((events $ map char "\\c") >>! withModeY modeToggleCommentSelection)
     , v_ins_char =
             (deprioritize >> v_ins_char super)
             -- I want softtabs to be deleted as if they are tabs. So if the

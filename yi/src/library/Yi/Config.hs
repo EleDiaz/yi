@@ -3,7 +3,6 @@
 module Yi.Config where
 
 import Data.Prototype
-import Data.Accessor.Template
 
 import Yi.Buffer
 import Yi.Layout
@@ -16,9 +15,10 @@ import Yi.Style
 import Yi.Style.Library
 import {-# source #-} Yi.UI.Common
 import qualified Yi.Interact as I
+import Yi.Utils
 
 data UIConfig = UIConfig {
-   configVtyEscDelay :: Int,       
+   configVtyEscDelay :: Int,
    configFontName :: Maybe String,  -- ^ Font name, for the UI that support it.
    configFontSize :: Maybe Int,     -- ^ Font size, for the UI that support it.
    configScrollStyle ::Maybe ScrollStyle,
@@ -64,10 +64,10 @@ data Config = Config {startFrontEnd :: UIBoot,
                       configRegionStyle :: RegionStyle,
                       -- ^ Set to 'Exclusive' for an emacs-like behaviour.
                       configKillringAccumulate :: Bool,
-                      -- ^ Set to 'True' for an emacs-like behaviour, where 
+                      -- ^ Set to 'True' for an emacs-like behaviour, where
                       -- all deleted text is accumulated in a killring.
                       configCheckExternalChangesObsessively :: Bool,
-                      bufferUpdateHandler :: [([Update] -> BufferM ())],
+                      bufferUpdateHandler :: [[Update] -> BufferM ()],
                       layoutManagers :: [AnyLayoutManager],
                       -- ^ List of layout managers for 'cycleLayoutManagersNext'
                       configVars :: ConfigVariables
@@ -82,5 +82,5 @@ configTopLevelKeymap = extractTopKeymap . defaultKm
 
 type UIBoot = Config -> (Event -> IO ()) -> ([Action] -> IO ()) ->  Editor -> IO UI
 
-$(nameDeriveAccessors ''Config (\n -> Just (n ++ "A")))
-$(nameDeriveAccessors ''UIConfig (\n -> Just (n ++ "A")))
+makeLensesWithSuffix "A" ''Config
+makeLensesWithSuffix "A" ''UIConfig

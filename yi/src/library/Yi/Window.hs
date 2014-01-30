@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveDataTypeable, TemplateHaskell, GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE DeriveDataTypeable #-}
 
 --
 -- Copyright (c) 2008 JP Bernardy
@@ -7,9 +7,10 @@
 
 module Yi.Window where
 
-import qualified Prelude
-import Yi.Prelude
 import Data.Binary
+import Data.Default
+import Data.Typeable
+import Control.Applicative
 import Yi.Buffer.Basic (BufferRef, WindowRef)
 import Yi.Region (Region,emptyRegion)
 import Yi.JumpList
@@ -48,8 +49,8 @@ winkey :: Window -> (Bool, BufferRef)
 winkey w = (isMini w, bufkey w)
 
 instance Show Window where
-    show w = "Window to " ++ show (bufkey w) 
-             -- ++ "{" ++ show (tospnt w) ++ "->" ++ show (bospnt w) ++ "}" 
+    show w = "Window to " ++ show (bufkey w)
+             -- ++ "{" ++ show (tospnt w) ++ "->" ++ show (bospnt w) ++ "}"
              ++ "(" ++ show (height w) ++ ")"
 
 instance Eq Window where
@@ -63,5 +64,5 @@ pointInWindow point win = tospnt win <= point && point <= bospnt win
 
 -- | Return a "fake" window onto a buffer.
 dummyWindow :: BufferRef -> Window
-dummyWindow b = Window False b [] 0 emptyRegion initial 0 Nothing
+dummyWindow b = Window False b [] 0 emptyRegion def 0 Nothing
 

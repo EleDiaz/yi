@@ -5,20 +5,20 @@ module Yi.Mode.Buffers (
          listBuffers
 ) where
 
-import Yi.Core
+import Control.Lens
 import Data.List ( intercalate )
 import System.FilePath ( takeFileName )
+import Yi.Core
 
-
-listBuffers :: YiM  () 
+listBuffers :: YiM  ()
 listBuffers = do
      withEditor $  do
        bs <- getBufferStack
-       bufRef <- stringToNewBuffer (Left "Buffer List")  $ fromString $ intercalate "\n" $ map identString bs
+       bufRef <- stringToNewBuffer (Left "Buffer List") $ fromString $ intercalate "\n" $ map identString bs
        switchToBufferE bufRef
      withBuffer $ do
-       modifyMode $ \m -> m {modeKeymap = topKeymapA ^: bufferKeymap, modeName = "buffers"}
-       putA readOnlyA True
+       modifyMode $ \m -> m {modeKeymap = topKeymapA %~ bufferKeymap, modeName = "buffers"}
+       assign readOnlyA True
 switch :: YiM ()
 switch =    do
     s <- withBuffer readLnB
@@ -27,11 +27,11 @@ switch =    do
 
 
 bufferKeymap :: Keymap -> Keymap
-bufferKeymap = do 
+bufferKeymap =
     (choice [
              char 'p'                         ?>>! lineUp,
              oneOf [char 'n', char ' ']       >>! lineDown,
-             oneOf [ spec KEnter, char 'f' ]  >>! (switch >> ( withBuffer $ putA readOnlyA False)),
-             char 'v'                        ?>>! switch >> ( withBuffer $ putA readOnlyA True)  ] 
+             oneOf [ spec KEnter, char 'f' ]  >>! (switch >> withBuffer (assign readOnlyA False)),
+             char 'v'                        ?>>! switch >>  withBuffer (assign readOnlyA True)  ]
      <||)
 

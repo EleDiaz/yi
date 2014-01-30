@@ -1,8 +1,14 @@
-{-# LANGUAGE FlexibleInstances, TypeFamilies, TemplateHaskell #-}
+{-# LANGUAGE
+  FlexibleInstances,
+  TypeFamilies,
+  DeriveFoldable,
+  DeriveFunctor #-}
 -- Copyright (c) JP Bernardy 2008
 -- | Parser for haskell that takes in account only parenthesis and layout
 module Yi.Syntax.Paren where
 
+import Prelude hiding (elem)
+import Control.Applicative
 import Yi.IncrementalParse
 import Yi.Lexer.Alex
 import Yi.Lexer.Haskell
@@ -10,16 +16,13 @@ import Yi.Style (hintStyle, errorStyle, StyleName)
 import Yi.Syntax.Layout
 import Yi.Syntax.Tree
 import Yi.Syntax
-import Yi.Prelude 
-import Prelude ()
-import Data.Monoid (Endo(..), appEndo, mappend)
-import Data.DeriveTH
+import Data.Foldable
+import Data.Traversable
+import Data.Monoid
 import Data.Maybe
-import Data.List (filter, takeWhile)
-import qualified Data.Foldable
 
-indentScanner :: Scanner (AlexState lexState) (TT)
-              -> Scanner (Yi.Syntax.Layout.State Token lexState) (TT)
+indentScanner :: Scanner (AlexState lexState) TT
+              -> Scanner (Yi.Syntax.Layout.State Token lexState) TT
 indentScanner = layoutHandler startsLayout [(Special '(', Special ')'),
                                             (Special '[', Special ']'),
                                             (Special '{', Special '}')] ignoredToken
@@ -29,11 +32,11 @@ indentScanner = layoutHandler startsLayout [(Special '(', Special ')'),
 -- parsing.
 
 isBrace :: TT -> Bool
-isBrace (Tok b _ _) = (Special '{') == b
+isBrace (Tok b _ _) = Special '{' == b
 
 ignoredToken :: TT -> Bool
 ignoredToken (Tok t _ _) = isComment t || t == CppDirective
-    
+
 isNoise :: Token -> Bool
 isNoise (Special c) = c `elem` ";,`"
 isNoise _ = True
@@ -46,52 +49,49 @@ data Tree t
     | Atom t
     | Error t
     | Expr [Tree t]
-      deriving Show
+      deriving (Show, Foldable, Functor)
 
-$(derive makeFoldable ''Tree)
 instance IsTree Tree where
     emptyNode = Expr []
     uniplate (Paren l g r) = (g,\g' -> Paren l g' r)
-    uniplate (Expr g) = (g,\g' -> Expr g')
-    uniplate (Block s) = (s,\s' -> Block s')
-    uniplate t = ([],\_ -> t)
+    uniplate (Expr g) = (g,Expr)
+    uniplate (Block s) = (s,Block)
+    uniplate t = ([],const t)
 
 -- | Search the given list, and return the 1st tree after the given
 -- point on the given line.  This is the tree that will be moved if
 -- something is inserted at the point.  Precondition: point is in the
--- given line.  
+-- given line.
 
 -- TODO: this should be optimized by just giving the point of the end
 -- of the line
 getIndentingSubtree :: Tree TT -> Point -> Int -> Maybe (Tree TT)
 getIndentingSubtree root offset line =
-    listToMaybe $ [t | (t,posn) <- takeWhile ((<= line) . posnLine . snd) $ allSubTreesPosn,
-                   -- it's very important that we do a linear search
-                   -- here (takeWhile), so that the tree is evaluated
-                   -- lazily and therefore parsing it can be lazy.
-                   posnOfs posn > offset, posnLine posn == line]
-    where allSubTreesPosn = [(t',posn) | t'@(Block _) <-filter (not . null . toList) (getAllSubTrees root), 
+    listToMaybe [t | (t,posn) <- takeWhile ((<= line) . posnLine . snd) allSubTreesPosn,
+                -- it's very important that we do a linear search
+                -- here (takeWhile), so that the tree is evaluated
+                -- lazily and therefore parsing it can be lazy.
+                posnOfs posn > offset, posnLine posn == line]
+    where allSubTreesPosn = [(t',posn) | t'@(Block _) <-filter (not . null . toList) (getAllSubTrees root),
                              let (tok:_) = toList t',
                              let posn = tokPosn tok]
 
 -- | Given a tree, return (first offset, number of lines).
 getSubtreeSpan :: Tree TT -> (Point, Int)
-getSubtreeSpan tree = (posnOfs $ first, lastLine - firstLine)
+getSubtreeSpan tree = (posnOfs first, lastLine - firstLine)
     where bounds@[first, _last] = fmap (tokPosn . assertJust) [getFirstElement tree, getLastElement tree]
           [firstLine, lastLine] = fmap posnLine bounds
           assertJust (Just x) = x
           assertJust _ = error "assertJust: Just expected"
 
--- $(derive makeFunctor ''Tree)
-
 -- dropWhile' f = foldMap (\x -> if f x then mempty else Endo (x :))
--- 
+--
 -- isBefore l (Atom t) = isBefore' l t
 -- isBefore l (Error t) = isBefore l t
 -- isBefore l (Paren l g r) = isBefore l r
 -- isBefore l (Block s) = False
--- 
--- isBefore' l (Tok {tokPosn = Posn {posnLn = l'}}) = 
+--
+-- isBefore' l (Tok {tokPosn = Posn {posnLn = l'}}) =
 
 
 parse :: P TT (Tree TT)
@@ -99,14 +99,14 @@ parse = Expr <$> parse' tokT tokFromT
 
 parse' :: (TT -> Token) -> (Token -> TT) -> P TT [Tree TT]
 parse' toTok _ = pExpr <* eof
-    where 
+    where
       -- | parse a special symbol
       sym c = symbol (isSpecial [c] . toTok)
 
-      pleaseSym c = (recoverWith errTok) <|> sym c
+      pleaseSym c = recoverWith errTok <|> sym c
 
       pExpr :: P TT (Expr TT)
-      pExpr = Yi.Prelude.many pTree
+      pExpr = many pTree
 
       pBlocks = (Expr <$> pExpr) `sepBy1` sym '.' -- the '.' is generated by the layout, see HACK above
       -- note that we can have empty statements, hence we use sepBy1.
@@ -125,8 +125,8 @@ parse' toTok _ = pExpr <* eof
       -- we don't try to recover errors with them.
 
 getStrokes :: Point -> Point -> Point -> Tree TT -> [Stroke]
-getStrokes point _begin _end t0 = -- trace (show t0) 
-                                  result 
+getStrokes point _begin _end t0 = -- trace (show t0)
+                                  result
     where getStrokes' (Atom t) = one (ts t)
           getStrokes' (Error t) = one (modStroke errorStyle (ts t)) -- paint in red
           getStrokes' (Block s) = getStrokesL s
@@ -136,15 +136,14 @@ getStrokes point _begin _end t0 = -- trace (show t0)
               -- left paren wasn't matched: paint it in red.
               -- note that testing this on the "Paren" node actually forces the parsing of the
               -- right paren, undermining online behaviour.
-              | (posnOfs $ tokPosn $ l) == point || (posnOfs $ tokPosn $ r) == point - 1
-
+              | posnOfs (tokPosn l) == point || posnOfs (tokPosn r) == point - 1
                = one (modStroke hintStyle (ts l)) <> getStrokesL g <> one (modStroke hintStyle (ts r))
               | otherwise  = one (ts l) <> getStrokesL g <> one (ts r)
           getStrokesL = foldMap getStrokes'
           ts = tokenToStroke
           result = appEndo (getStrokes' t0) []
           one x = Endo (x :)
-          
+
 
 tokenToStroke :: TT -> Stroke
 tokenToStroke = fmap tokenToStyle . tokToSpan
@@ -157,7 +156,7 @@ tokenToAnnot = sequenceA . tokToSpan . fmap tokenToText
 
 
 -- | Create a special error token. (e.g. fill in where there is no correct token to parse)
--- Note that the position of the token has to be correct for correct computation of 
+-- Note that the position of the token has to be correct for correct computation of
 -- node spans.
 errTok :: Parser (Tok t) (Tok Token)
 errTok = mkTok <$> curPos

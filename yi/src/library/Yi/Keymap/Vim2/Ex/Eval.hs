@@ -3,8 +3,7 @@ module Yi.Keymap.Vim2.Ex.Eval
     , exEvalY
     ) where
 
-import Prelude ()
-import Yi.Prelude
+import Control.Monad
 
 import Yi.Editor
 import Yi.Keymap
@@ -23,7 +22,7 @@ evalHelper :: MonadEditor m =>
 evalHelper pureHandler impureHandler cmds cmdString =
     case stringToExCommand cmds cmdString of
         Just cmd -> case cmdAction cmd of
-            BufferA actionB -> pureHandler $ withBuffer0 (discard actionB)
-            EditorA actionE -> pureHandler (discard actionE)
-            YiA actionY -> impureHandler (discard actionY)
+            BufferA actionB -> pureHandler $ withBuffer0 (void actionB)
+            EditorA actionE -> pureHandler (void actionE)
+            YiA actionY -> impureHandler (void actionY)
         _ -> return ()

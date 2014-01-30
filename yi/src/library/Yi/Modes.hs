@@ -9,15 +9,14 @@ module Yi.Modes (TokenBasedMode, fundamentalMode,
                  gitCommitMode, rubyMode
                 ) where
 
-import Prelude ()
-import Data.List ( isPrefixOf, map, filter )
+import Control.Applicative
+import Data.List (isPrefixOf)
 import Data.Maybe
 import System.FilePath
 import Text.Regex.TDFA ((=~))
 
 import Yi.Buffer
 import Yi.Lexer.Alex (Tok(..), tokToSpan)
-import Yi.Prelude
 import Yi.Style
 import Yi.Syntax
 import Yi.Syntax.Tree
@@ -54,7 +53,7 @@ svnCommitMode, cMode, objectiveCMode, cppMode, cabalMode,
 ocamlMode :: TokenBasedMode OCaml.Token
 
 fundamentalMode = emptyMode
-  { 
+  {
    modeName = "fundamental",
    modeApplies = modeAlwaysApplies,
    modeIndent = const autoIndentB,
@@ -72,8 +71,8 @@ linearSyntaxMode :: forall lexerState t.
                                                            Alex.AlexInput)))
                                                 -> (t -> StyleName)
                                                 -> Mode (Tree (Tok t))
-linearSyntaxMode initSt scanToken tokenToStyle 
-    = fundamentalMode { 
+linearSyntaxMode initSt scanToken tokenToStyle
+    = fundamentalMode {
                         modeHL = ExtHL $ Driver.mkHighlighter (IncrParser.scanner OnlineTree.manyToks . lexer),
                         modeGetStrokes = tokenBasedStrokes tokenToStroke
                       }
@@ -85,7 +84,7 @@ removeAnnots m = m { modeName = modeName m ++ " no annots", modeGetAnnotations =
 
 cMode = (linearSyntaxMode C.initState C.alexScanToken id)
   {
-    modeApplies = anyExtension ["c", "h"], 
+    modeApplies = anyExtension ["c", "h"],
     modeName = "c"
   }
 
@@ -97,7 +96,7 @@ objectiveCMode = (linearSyntaxMode ObjectiveC.initState ObjectiveC.alexScanToken
 
 cppMode = (linearSyntaxMode Cplusplus.initState Cplusplus.alexScanToken id)
   {
-    modeApplies = anyExtension ["cxx", "cpp", "hxx"], 
+    modeApplies = anyExtension ["cxx", "cpp", "hxx"],
     modeName = "c++"
   }
 
@@ -112,7 +111,7 @@ cabalMode = (linearSyntaxMode Cabal.initState Cabal.alexScanToken id)
 srmcMode = (linearSyntaxMode Srmc.initState Srmc.alexScanToken id)
   {
     modeName = "srmc",
-    modeApplies = anyExtension ["pepa", -- pepa is a subset of srmc    
+    modeApplies = anyExtension ["pepa", -- pepa is a subset of srmc
                                 "srmc"]
   }
 
@@ -127,7 +126,7 @@ gitCommitMode = (linearSyntaxMode GitCommit.initState GitCommit.alexScanToken id
 svnCommitMode = (linearSyntaxMode SVNCommit.initState SVNCommit.alexScanToken id)
   {
     modeName = "svn-commit",
-    modeApplies = \path _contents -> isPrefixOf "svn-commit" path && extensionMatches ["tmp"] path 
+    modeApplies = \path _contents -> isPrefixOf "svn-commit" path && extensionMatches ["tmp"] path
   }
 
 ocamlMode = (linearSyntaxMode OCaml.initState OCaml.alexScanToken OCaml.tokenToStyle)
@@ -152,6 +151,7 @@ pythonMode = base
   {
     modeName = "python",
     modeApplies = anyExtension ["py"],
+    modeToggleCommentSelection = toggleCommentSelectionB "# " "#",
     modeIndentSettings = (modeIndentSettings base)
       {
         expandTabs = True,
@@ -237,10 +237,9 @@ hookModes p h = map $ \am@(AnyMode m) -> if p am
 applyModeHooks :: [(AnyMode -> Bool, BufferM ())] -> [AnyMode] -> [AnyMode]
 applyModeHooks hs ms = flip map ms $ \am -> case filter (($am) . fst) hs of
     [] -> am
-    ls -> onMode (\m -> m { modeOnLoad = foldr (>>) (modeOnLoad m) (map snd ls) }) am
+    ls -> onMode (\m -> m { modeOnLoad = foldr ((>>) . snd) (modeOnLoad m) ls }) am
 
 -- | Check whether a mode of the same name is already in modeTable and returns the
 -- original mode, if it isn't the case.
 lookupMode :: AnyMode -> YiM AnyMode
 lookupMode am@(AnyMode m) = fromMaybe am <$> anyModeByNameM (modeName m)
-

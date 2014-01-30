@@ -7,7 +7,7 @@ Its features include
 * a purely functional editor core;
 * keybindings written as parsers of the input;
 * Emacs, Vim and Cua (subset) emulations provided by default;
-* Vty (terminal) and Gtk-based Pango UIs, as well as a Cocoa frontend in development.
+* Vty (terminal) and Gtk-based Pango UIs
 
 The long term goal of the project is to make Yi the editor of choice for the haskell hacker. The main short term goal is to maximize Yi's Fun Factor. This means that we want to
 
@@ -33,7 +33,7 @@ You can specify frontends to compile, also:
 
     $ cabal install yi -fvty -fpango
 
-Options are `-fvty`, `-fvte`, `-fpango`, and `-fcocoa`. Some are likely broken.
+Options are `-fvty` and `-fpango`.
 
 You can also install the `yi-contrib` package, which contains some extra contributed things (like user configs):
 
@@ -57,18 +57,6 @@ To get the git version,
     $ git clone git://github.com/yi-editor/yi.git
 
 (There may be more repositories in the future, as yi is split more.)
-
-## Generating documentation
-
-Due to [a cabal bug][cabal656], documentation won't be generated when running 'cabal install yi'. Use the following workaround:
-
-    $ cabal install -fdochack yi
-
-This command will install the yi library with documentation, but not the yi executable. To install the executable, simply run
-
-    $ cabal install yi
-
-after the documentation has been generated.
 
 ## Reporting Bugs
 
@@ -97,10 +85,10 @@ It's possible to customize even these user configs in the same way as the exampl
 
 ## Frontend Compatibility
 
-            |  Vty    Pango  Cocoa
-    --------+----------------------
+            |  Vty    Pango
+    --------+----------------
     Linux   |   X       X
-    OSX     |   X       X      X
+    OSX     |   X       X
     Windows |           X
 
 Windows support for Vty may eventually come; patches on the vty package would certainly be appreciated.
@@ -111,11 +99,29 @@ The plan is to move the UI frontends into separate packages, but this has not ye
 
 If you're interested in optimizing Yi, [this thread][profiling-discussion] may be of use.
 
+## Reading material
+
+There are some papers which might interest you. If you plan on hacking
+on Yi, it's very recommended that you read these
+
+* [An editor in Haskell for Haskell][small-yi]
+
+* [Lazy Functional Incremental Parsing][lazy-parsing] in Yi
+
+* [A JavaScript Mode for Yi][js]
+
+* [Robust & Precise incremental parsing of Haskell][precise-haskell]
+  talks about the precise Haskell mode.
+
+
 [haskellwiki]: http://haskell.org/haskellwiki/Yi
 [github]: https://github.com/yi-editor/
 [issueslist]: https://github.com/yi-editor/yi/issues
 [yi-devel]: http://groups.google.com/group/yi-devel
 [dyre]: http://hackage.haskell.org/package/dyre
 [userconfigs]: https://github.com/yi-editor/yi/tree/master/yi-contrib/src/Yi/Config/Users
-[cabal656]: http://hackage.haskell.org/trac/hackage/ticket/656
 [profiling-discussion]: https://groups.google.com/forum/?fromgroups=#!topic/yi-devel/2dUXKJMSFsM
+[small-yi]: http://publications.lib.chalmers.se/records/fulltext/local_72549.pdf
+[lazy-parsing]: http://publications.lib.chalmers.se/records/fulltext/local_94979.pdf
+[js]: http://publications.lib.chalmers.se/records/fulltext/112284.pdf
+[precise-haskell]: http://publications.lib.chalmers.se/records/fulltext/117337.pdf

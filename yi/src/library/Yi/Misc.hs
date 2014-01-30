@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveDataTypeable, GeneralizedNewtypeDeriving, TypeOperators #-}
+{-# LANGUAGE TypeOperators #-}
 -- Copyright (c) 2008 Jean-Philippe Bernardy
 -- | Various high-level functions to further classify.
 module Yi.Misc
@@ -15,7 +15,6 @@ import Data.List
   ( isPrefixOf
   , stripPrefix
   , (\\)
-  , filter
   )
 import System.FriendlyPath
   ( expandTilda
@@ -34,13 +33,15 @@ import System.Directory
   , getCurrentDirectory
   )
 
-import Control.Monad.Trans (MonadIO (..))
+import Control.Applicative
+import Control.Monad.Base
 {- External Library Module Imports -}
 {- Local (yi) module imports -}
 
-import Prelude ()
-import Yi.Core
+import Data.Maybe (isNothing)
+import System.CanonicalizePath (canonicalizePath, replaceShorthands)
 
+import Yi.Core
 import Yi.MiniBuffer
     ( withMinibufferGen
     , mkCompleteFn
@@ -48,8 +49,7 @@ import Yi.MiniBuffer
 import Yi.Completion
     ( completeInList'
     )
-import System.CanonicalizePath (canonicalizePath, replaceShorthands)
-import Data.Maybe (isNothing)
+import Yi.Monad
 
 -- | Given a possible starting path (which if not given defaults to
 --   the current directory) and a fragment of a path we find all
@@ -63,24 +63,25 @@ getAppropriateFiles :: Maybe String -> String -> YiM (String, [ String ])
 getAppropriateFiles start s' = do
   curDir <- case start of
             Nothing -> do bufferPath <- withBuffer $ gets file
-                          liftIO $ getFolder bufferPath
+                          liftBase $ getFolder bufferPath
             (Just path) -> return path
   let s = replaceShorthands s'
       sDir = if hasTrailingPathSeparator s then s else takeDirectory s
-      searchDir = if null sDir then curDir
-                  else if isAbsolute' sDir then sDir
-                  else curDir </> sDir
-  searchDir' <- liftIO $ expandTilda searchDir
+      searchDir
+        | null sDir = curDir
+        | isAbsolute' sDir = sDir
+        | otherwise = curDir </> sDir
+  searchDir' <- liftBase $ expandTilda searchDir
   let fixTrailingPathSeparator f = do
                        isDir <- doesDirectoryExist (searchDir' </> f)
                        return $ if isDir then addTrailingPathSeparator f else f
 
-  files <- liftIO $ getDirectoryContents searchDir'
+  files <- liftBase $ getDirectoryContents searchDir'
 
   -- Remove the two standard current-dir and parent-dir as we do not
   -- need to complete or hint about these as they are known by users.
   let files' = files \\ [ ".", ".." ]
-  fs <- liftIO $ mapM fixTrailingPathSeparator files'
+  fs <- liftBase $ mapM fixTrailingPathSeparator files'
   let matching = filter (isPrefixOf $ takeFileName s) fs
   return (sDir, matching)
 
@@ -108,7 +109,7 @@ matchingFileNames start s = do
   -- a prefix of ("." </> "foobar"), resulting in a failed completion
   --
   -- However, if user inputs ":e ./foo<Tab>", we need to prepend @sDir@ to @files@
-  let results = if (isNothing start && sDir == "." && not ("./" `isPrefixOf` s))
+  let results = if isNothing start && sDir == "." && not ("./" `isPrefixOf` s)
                    then files
                    else fmap (sDir </>) files
 
@@ -125,14 +126,18 @@ adjIndent ib = withSyntaxB' (\m s -> modeIndent m s ib)
 
 
 
--- | Generic emacs style prompt file action. Takes a @prompt and a continuation @act
---   and prompts the user with file hints
+-- | Generic emacs style prompt file action. Takes a @prompt@ and a continuation
+-- @act@ and prompts the user with file hints.
 promptFile :: String -> (String -> YiM ()) -> YiM ()
-promptFile prompt act = do maybePath <- withBuffer $ gets file
-                           startPath <- addTrailingPathSeparator <$> (liftIO $ canonicalizePath =<< getFolder maybePath)
-                           -- TODO: Just call withMinibuffer
-                           withMinibufferGen startPath (findFileHint startPath) prompt (completeFile startPath)
-                             (act . replaceShorthands)
+promptFile prompt act = do
+  maybePath <- withBuffer $ gets file
+  startPath <- addTrailingPathSeparator
+               <$> liftBase (canonicalizePath =<< getFolder maybePath)
+  -- TODO: Just call withMinibuffer
+  withMinibufferGen startPath (findFileHint startPath) prompt
+    (completeFile startPath) showCanon (act . replaceShorthands)
+  where
+    showCanon = withBuffer . replaceBufferContent . replaceShorthands
 
 matchFile :: String -> String -> Maybe String
 matchFile path proposedCompletion =

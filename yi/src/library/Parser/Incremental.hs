@@ -8,7 +8,7 @@
 
 -- Optimize profile info (no more Ints)
 
-module Parser.Incremental (Process, 
+module Parser.Incremental (Process,
                            recoverWith, symbol, eof, lookNext, testNext, run,
                            mkProcess, profile, pushSyms, pushEof, evalL, evalR, feedZ,
                            Parser(Look, Enter, Yuck), countWidth, fullLog, LogEntry(..),
@@ -33,32 +33,30 @@ infixr :<
 
 -- | Parser specification
 data Parser s a where
-    Pure :: a -> Parser s a
-    Appl :: Parser s (b -> a) -> Parser s b -> Parser s a
+    Pure  :: a                               -> Parser s a
+    Appl  :: Parser s (b -> a) -> Parser s b -> Parser s a
 
-    Bind :: Parser s a -> (a -> Parser s b) -> Parser s b
+    Bind  :: Parser s a -> (a -> Parser s b) -> Parser s b
 
-    Look :: Parser s a -> (s -> Parser s a) -> Parser s a
-    Shif :: Parser s a -> Parser s a
-    Empt :: Parser s a
-    Disj :: Parser s a -> Parser s a -> Parser s a
-    Yuck :: Parser s a -> Parser s a
-    Enter :: String -> Parser s a -> Parser s a
-    
+    Look  :: Parser s a -> (s -> Parser s a) -> Parser s a
+    Shif  :: Parser s a                      -> Parser s a
+    Empt  ::                                    Parser s a
+    Disj  :: Parser s a -> Parser s a        -> Parser s a
+    Yuck  :: Parser s a                      -> Parser s a
+    Enter :: String -> Parser s a            -> Parser s a
 
 -- | Parser process
 data Steps s a where
-    Val   :: a -> Steps s r                      -> Steps s (a :< r)
-    App   :: Steps s ((b -> a) :< (b :< r))      -> Steps s (a :< r)
-    Done  ::                               Steps s ()
-    Shift ::           Steps s a        -> Steps s a
-    Sh'   ::             Steps s a        -> Steps s a
-    Sus   :: Steps s a -> (s -> Steps s a) -> Steps s a
-    Best  :: Ordering -> Profile -> Steps s a -> Steps s a -> Steps s a
-    Dislike :: Steps s a -> Steps s a
-    Log :: String -> Steps s a -> Steps s a
-    Fail :: Steps s a
-
+    Val     :: a -> Steps s r                                -> Steps s (a :< r)
+    App     :: Steps s ((b -> a) :< (b :< r))                -> Steps s (a :< r)
+    Done    ::                                                  Steps s ()
+    Shift   :: Steps s a                                     -> Steps s a
+    Sh'     :: Steps s a                                     -> Steps s a
+    Sus     :: Steps s a -> (s -> Steps s a)                 -> Steps s a
+    Best    :: Ordering -> Profile -> Steps s a -> Steps s a -> Steps s a
+    Dislike :: Steps s a                                     -> Steps s a
+    Log     :: String -> Steps s a                           -> Steps s a
+    Fail    ::                                                  Steps s a
 
 -- profile !! s = number of Dislikes found to do s Shifts
 data Profile = PSusp | PFail | PRes Int | !Int :> Profile
@@ -67,7 +65,7 @@ data Profile = PSusp | PFail | PRes Int | !Int :> Profile
 mapSucc :: Profile -> Profile
 mapSucc PSusp = PSusp
 mapSucc PFail = PFail
-mapSucc (PRes x) = PRes (succ x) 
+mapSucc (PRes x) = PRes (succ x)
 mapSucc (x :> xs) = succ x :> mapSucc xs
 
 -- Map lookahead to maximum dislike difference we accept. When looking much further,
@@ -75,7 +73,7 @@ mapSucc (x :> xs) = succ x :> mapSucc xs
 -- its argument increases, so that we can discard things with dislikes using only
 -- finite lookahead.
 dislikeThreshold :: Int -> Int
-dislikeThreshold n 
+dislikeThreshold n
     | n < 5 = 0
     | otherwise = -1 -- we looked 5 tokens ahead, and still have no clue who is the best. Pick at random.
 
@@ -112,7 +110,7 @@ rightLog (Fail) = Node LFail []
 rightLog (Dislike p) = Node LDislike [rightLog p]
 rightLog (Log msg p) = Node (LLog msg) [rightLog p]
 rightLog (Sus _ _) = Node LSusp []
-rightLog (Best _ _ l r) = Node LEmpty ((rightLog l):[rightLog r])
+rightLog (Best _ _ l r) = Node LEmpty (rightLog l:[rightLog r])
 rightLog (Sh' _) = error "Sh' should be hidden by Sus"
 
 profile :: Steps s r -> Profile
@@ -128,12 +126,12 @@ profile (Best _ pr _ _) = pr
 profile (Sh' _) = error "Sh' should be hidden by Sus"
 
 instance Show (Steps s r) where
-    show (Val _ p) = "v" ++ show p
-    show (App p) = "*" ++ show p
+    show (Val _ p) = 'v' : show p
+    show (App p) = '*' : show p
     show (Done) = "1"
-    show (Shift p) = ">" ++ show p
-    show (Sh' p) = "'" ++ show p
-    show (Dislike p) = "?"  ++ show p
+    show (Shift p) = '>' : show p
+    show (Sh' p) = '\'' : show p
+    show (Dislike p) = '?' : show p
     show (Log msg p) = "[" ++ msg ++ "]"  ++ show p
     show (Fail) = "0"
     show (Sus _ _) = "..."
@@ -141,7 +139,7 @@ instance Show (Steps s r) where
 
 countWidth :: Zip s r -> Int
 countWidth (Zip _ _ r) = countWidth' r
-  where countWidth' :: (Steps s r) -> Int
+  where countWidth' :: Steps s r -> Int
         countWidth' r' = case r' of
             (Best _ _ p q) ->  countWidth' p + countWidth' q
             (Val _ p) -> countWidth' p
@@ -185,7 +183,7 @@ instance Functor (Parser s) where
 
 instance Applicative (Parser s) where
     (<*>) = Appl
-    pure x = Pure x
+    pure = Pure
 
 instance Alternative (Parser s) where
     (<|>) = Disj
@@ -196,26 +194,26 @@ instance Monad (Parser s) where
     return = pure
     fail _message = Empt
 
-toQ :: Parser s a -> forall h r. ((h,a) -> Steps s r)  -> (h -> Steps s r)
+toQ :: Parser s a -> forall h r. ((h,a) -> Steps s r)  -> h -> Steps s r
 toQ (Look a f) = \k h -> Sus (toQ a k h) (\s -> toQ (f s) k h)
 toQ (p `Appl` q) = \k -> toQ p $ toQ q $ \((h, b2a), b) -> k (h, b2a b)
 toQ (Pure a)     = \k h -> k (h, a)
 toQ (Disj p q)   = \k h -> iBest (toQ p k h) (toQ q k h)
-toQ (Bind p a2q) = \k -> (toQ p) (\(h,a) -> toQ (a2q a) k h)
+toQ (Bind p a2q) = \k -> toQ p (\(h,a) -> toQ (a2q a) k h)
 toQ Empt = \_k _h -> Fail
 toQ (Yuck p) = \k h -> Dislike $ toQ p k h
 toQ (Enter err p) = \k h -> Log err $ toQ p k h
 toQ (Shif p) = \k h -> Sh' $ toQ p k h
 
-toP :: Parser s a -> forall r. (Steps s r)  -> (Steps s (a :< r))
+toP :: Parser s a -> forall r. Steps s r -> Steps s (a :< r)
 toP (Look a f) = \fut -> Sus (toP a fut) (\s -> toP (f s) fut)
 toP (Appl f x) = App . toP f . toP x
 toP (Pure x)   = Val x
-toP Empt = \_fut -> Fail
+toP Empt = const Fail
 toP (Disj a b)  = \fut -> iBest (toP a fut) (toP b fut)
-toP (Bind p a2q) = \fut -> (toQ p) (\(_,a) -> (toP (a2q a)) fut) ()
-toP (Yuck p) = Dislike . toP p 
-toP (Enter err p) = Log err . toP p 
+toP (Bind p a2q) = \fut -> toQ p (\(_,a) -> toP (a2q a) fut) ()
+toP (Yuck p) = Dislike . toP p
+toP (Enter err p) = Log err . toP p
 toP (Shif p) = Sh' . toP p
 
 -- | Intelligent, caching best.
@@ -223,7 +221,7 @@ iBest :: Steps s a -> Steps s a -> Steps s a
 iBest p q = let ~(choice, pr) = better 0 (profile p) (profile q) in Best choice pr p q
 
 symbol :: forall s. (s -> Bool) -> Parser s s
-symbol f = Look empty $ \s -> if f s then (Shif $ pure s) else empty
+symbol f = Look empty $ \s -> if f s then Shif $ pure s else empty
 
 eof :: forall s. Parser s ()
 eof = Look (pure ()) (const empty)
@@ -277,9 +275,9 @@ evalL' :: Zip s output -> Zip s output
 evalL' (Zip errs0 l0 r0) = Zip errs0 l0 (simplRhs r0)
     where simplRhs :: Steps s a ->Steps s a
           simplRhs rhs = case rhs of
-            (Val a r) ->(Val a (simplRhs r))
-            (App r)  -> (App (simplRhs r))
-            (Shift p) -> (Shift (simplRhs p))
+            (Val a r) -> Val a (simplRhs r)
+            (App r)  -> App (simplRhs r)
+            (Shift p) -> Shift (simplRhs p)
             (Log err p) -> Log err $ simplRhs p
             (Dislike p) -> Dislike $ simplRhs p
             (Best choice _ p q) -> case choice of
@@ -302,17 +300,17 @@ mkProcess p = Zip [] RStop (toP p Done)
 
 -- | Run a process (in case you do not need the incremental interface)
 run :: Process s a -> [s] -> (a, [String])
-run p input = evalR $ pushEof $ pushSyms input $ p
+run p input = evalR $ pushEof $ pushSyms input p
 
 testNext :: (Maybe s -> Bool) -> Parser s ()
-testNext f = Look (if f Nothing then ok else empty) (\s -> 
-   if (f $ Just s) then ok else empty)
+testNext f = Look (if f Nothing then ok else empty) (\s ->
+   if f $ Just s then ok else empty)
     where ok = pure ()
 
 lookNext :: Parser s (Maybe s)
-lookNext = Look (pure Nothing) (\s -> pure (Just s))
+lookNext = Look (pure Nothing) (pure . Just)
 
-        
+
 
 -- | Parse the same thing as the argument, but will be used only as
 -- backup. ie, it will be used only if disjuncted with a failing
@@ -332,7 +330,7 @@ recoverWith = Enter "recoverWith" . Yuck
 -- and the stack produced (output)
 data RPolish input output where
   RPush :: a -> RPolish (a :< rest) output -> RPolish rest output
-  RApp :: RPolish (b :< rest) output -> RPolish ((a -> b) :< a :< rest) output 
+  RApp :: RPolish (b :< rest) output -> RPolish ((a -> b) :< a :< rest) output
   RStop :: RPolish rest rest
 
 -- Evaluate the output of an RP automaton, given an input stack
@@ -356,8 +354,8 @@ data Zip s output where
    -- note that the Stack produced by the Polish expression matches
    -- the stack consumed by the RP automaton.
 
-fullLog :: Zip s output -> ([String],(Tree LogEntry))
-fullLog (Zip msg _ rhs) = ((reverse msg), (rightLog rhs))
+fullLog :: Zip s output -> ([String],Tree LogEntry)
+fullLog (Zip msg _ rhs) = (reverse msg, rightLog rhs)
 
 instance Show (Zip s output) where
     show (Zip errs l r) = show l ++ "<>" ++ show r ++ ", errs = " ++ show errs

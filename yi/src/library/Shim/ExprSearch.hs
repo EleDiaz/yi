@@ -40,20 +40,12 @@ data FindResult
   | FoundModule ModuleName
   | NotFound
 
-#if __GLASGOW_HASKELL__ < 610
-findExprInCheckedModule :: Int -> Int -> CheckedModule -> FindResult
-findExprInCheckedModule line col (CheckedModule {
-					parsedSource = hsSource,
-					renamedSource = mb_rnSource,
-					typecheckedSource = mb_tcSource }) =
-#else
 findExprInCheckedModule :: Int -> Int -> TypecheckedModule -> FindResult
 findExprInCheckedModule line col mdl =
   let hsSource = parsedSource mdl
       mb_rnSource = renamedSource mdl
       mb_tcSource = Just $ typecheckedSource mdl
   in
-#endif
   case doSearch searchLBinds FoundId mb_tcSource of
     NotFound -> case doSearch searchRenamedSource FoundName mb_rnSource of
                   NotFound -> doSearchModule hsSource
@@ -62,17 +54,10 @@ findExprInCheckedModule line col mdl =
   where
     doSearch f ret (Just x) = runSearch line col ret (f x)
     doSearch f ret Nothing  = NotFound
-#if __GLASGOW_HASKELL__ > 606
     doSearchModule (L span (HsModule _ _ decls _ _ _ _)) =
       runSearch line col undefined (searchList searchLImportDecl decls)
 
 searchRenamedSource (group, _, _, _, _) = searchGroup group
-#else
-    doSearchModule (L span (HsModule _ _ decls _ _)) =
-      runSearch line col undefined (searchList searchLImportDecl decls)
-
-searchRenamedSource (group, _, _) = searchGroup group
-#endif
 
 
 -- -----------------------------------------------------------------------------
@@ -82,7 +67,7 @@ searchRenamedSource (group, _, _) = searchGroup group
 -- Utils used in expr searching
 
 searchList :: (a -> Search b) -> [a] -> Search b
-searchList f xs = foldr orSearch failSearch (map f xs)
+searchList f = foldr (orSearch . f) failSearch
 
 searchBag :: (a -> Search b) -> Bag a -> Search b
 searchBag f bag = searchList f (bagToList bag)
@@ -100,7 +85,7 @@ lsearch' f (L span a) = contSpan span (f a)
 -- -----------------------------------------------------------------------------
 -- Binds
 
-searchLBinds binds = searchBag searchLBind binds
+searchLBinds = searchBag searchLBind
 
 searchLBind (L _ (AbsBinds _ _ exports bs))
   = extendIdMap pairs $ searchLBinds bs
@@ -108,11 +93,7 @@ searchLBind (L _ (AbsBinds _ _ exports bs))
 searchLBind (L span bind)
   = contSpan span $ searchBind bind
 
-#if __GLASGOW_HASKELL__ > 606
 searchBind (FunBind (L idspan id) _ lmatches _ _ _)
-#else
-searchBind (FunBind (L idspan id) _ lmatches _ _)
-#endif
   = checkId idspan id `orSearch`
     searchMatchGroup lmatches
 searchBind (PatBind pat grhss _ _)
@@ -132,7 +113,7 @@ searchValBinds (ValBindsOut binds sigs)
   = foldr (\(_,binds) cont -> searchLBinds binds `orSearch` cont) failSearch binds
    `orSearch` Search (\line col idmap ret -> runSearch line col FoundName (searchList searchLSig sigs))
 
-searchLIPBind lipbind = lsearch searchIPBind lipbind
+searchLIPBind = lsearch searchIPBind
 searchIPBind (IPBind _ipname e) = searchLExpr e
 
 -- -----------------------------------------------------------------------------
@@ -140,21 +121,12 @@ searchIPBind (IPBind _ipname e) = searchLExpr e
 
 searchLPat (L span (VarPat id))  = checkId span id
 searchLPat (L span (LitPat lit)) = checkLiteral span lit
-#if __GLASGOW_HASKELL__ >= 610
 searchLPat (L span (NPat lit _ _)) = checkLiteral span (over_lit_lit lit)
-#else
-searchLPat (L span (NPat lit _ _ _)) = checkLiteral span (over_lit_lit lit)
-#endif
    where
      over_lit_lit :: HsOverLit id -> HsLit
-#if __GLASGOW_HASKELL__ >= 610
      over_lit_lit (OverLit (HsIntegral i) _ _ _) = HsIntPrim i
      over_lit_lit (OverLit (HsFractional f) _ _ _) = HsFloatPrim f
      over_lit_lit (OverLit (HsIsString s) _ _ _) = HsStringPrim s
-#else
-     over_lit_lit (HsIntegral i _) = HsIntPrim   i
-     over_lit_lit (HsFractional f _) = HsFloatPrim f
-#endif
 searchLPat lpat = lsearch searchPat lpat
 
 searchPat pat = 
@@ -183,28 +155,21 @@ searchPat pat =
 searchConDetails search details
   = case details of
 	PrefixCon ps  -> searchList search ps
-#if __GLASGOW_HASKELL__ > 606
 	RecCon (HsRecFields fields dotdot) -> searchList rec fields
 		where rec (HsRecField lid p _) = searchLId lid `orSearch` search p
-#else
-        RecCon fields -> searchList rec fields
-                where rec (lid,p) = searchLId lid `orSearch` search p
-#endif
 	InfixCon p1 p2 -> search p1 `orSearch` search p2
 
-#if __GLASGOW_HASKELL__ > 606
 searchConDeclDetails search (PrefixCon ps)   = searchList search ps
 searchConDeclDetails search (InfixCon p1 p2) = search p1 `orSearch` search p2
 searchConDeclDetails search (RecCon fields) = searchList rec fields
 		where rec (ConDeclField ln ty _) = searchLId ln `orSearch` search ty
-#endif
 
 -- -----------------------------------------------------------------------------
 -- Matches
 
 searchMatchGroup (MatchGroup lmatches _) = searchLMatches lmatches
 
-searchLMatches lmatches = searchList searchLMatch lmatches
+searchLMatches = searchList searchLMatch
 
 searchLMatch lmatch@(L span _) = lsearch' searchMatch lmatch
 
@@ -226,8 +191,8 @@ searchGRHS (GRHS stmts expr)
 -- -----------------------------------------------------------------------------
 -- Statements
 
-searchLStmts lstmts = searchList searchLStmt lstmts
-searchLStmt lstmt = lsearch searchStmt lstmt
+searchLStmts = searchList searchLStmt
+searchLStmt = lsearch searchStmt
 
 searchStmt (BindStmt pat lexpr _ _)
   = searchLPat pat
@@ -246,20 +211,13 @@ searchStmt (RecStmt lstmts _ _ exprs _)
 
 searchLId (L span id) = checkId span id
 
-searchLExprs lexprs = searchList searchLExpr lexprs
+searchLExprs = searchList searchLExpr
 
 searchLExpr (L span (HsLit lit)) = checkLiteral span lit
 searchLExpr (L span (HsVar id))  = checkId span id
-#if __GLASGOW_HASKELL__ > 606
 searchLExpr (L span (HsWrap _ e)) = checkId span id
    where id = getCornerId e
-#else
-searchLExpr (L span (TyApp e _)) = checkId span id
-   where id = getCornerIdL e
-searchLExpr (L span (DictApp e _)) = checkId span id
-   where id = getCornerIdL e
-#endif
-searchLExpr lexpr = lsearch searchExpr lexpr
+searchLExpr = lsearch searchExpr
 
 -- The typechecker likes to expand identifiers with type applications
 -- and dictionary applications, but it doesn't propagate the srcloc
@@ -267,12 +225,7 @@ searchLExpr lexpr = lsearch searchExpr lexpr
 getCornerIdL (L _ e) = getCornerId e
 
 getCornerId (HsVar id)    = id
-#if __GLASGOW_HASKELL__ > 606
 getCornerId (HsWrap _ e)   = getCornerId e
-#else
-getCornerId (TyApp e _)   = getCornerIdL e
-getCornerId (DictApp e _) = getCornerIdL e
-#endif
 
 searchExpr e 
   = case e of
@@ -309,14 +262,8 @@ searchExpr e
 
       RecordCon	lid _ recbinds -> searchLId lid 
 				`orSearch` searchRecBinds recbinds
-#if __GLASGOW_HASKELL__ > 606
       RecordUpd	e recbinds _ _ _ -> searchLExpr e
 				`orSearch` searchRecBinds recbinds
-#else
-
-      RecordUpd	e recbinds   _ _ -> searchLExpr e
-				`orSearch` searchRecBinds recbinds
-#endif
       ExprWithTySig e ty -> searchLExpr e `orSearch` searchLType ty
 
       ArithSeq e seqinfo -> searchSeqInfo seqinfo
@@ -326,14 +273,7 @@ searchExpr e
       HsSCC _ e -> searchLExpr e
 
       HsCoreAnn _ e  -> searchLExpr e
-#if __GLASGOW_HASKELL__ > 606
       HsWrap _ e   -> searchExpr e
-#else
-      TyLam _ e   -> searchLExpr e
-      TyApp e _   -> searchLExpr e
-      DictLam _ e -> searchLExpr e
-      DictApp e _ -> searchLExpr e
-#endif
       _ -> failSearch  -- nothing else contains any names.
 		    -- Implicit parameters: we can't jump to the decl, 
 		    -- because they are dynamically scoped!
@@ -348,21 +288,14 @@ searchSeqInfo (FromThenTo e1 e2 e3)
   = searchLExpr e1 `orSearch` searchLExpr e2 `orSearch` searchLExpr e3
 
 searchRecBinds :: Ord b => HsRecordBinds b -> Search b
-#if __GLASGOW_HASKELL__ > 606
 searchRecBinds (HsRecFields fields dotdot) = searchList searchRecBind fields
   where searchRecBind (HsRecField (L span field) expr _) =
 	   checkId span field `orSearch` searchLExpr expr
-#else
-searchRecBinds recbinds = searchList searchRecBind recbinds
-  where searchRecBind (L span field,expr) =
-	   checkId span field `orSearch` searchLExpr expr
-#endif
-
 
 -- ----------------------------------------------------------------------------
 -- Sigs
 
-searchLSig lsig = lsearch searchSig lsig
+searchLSig = lsearch searchSig
 
 searchSig (TypeSig lid tp) = searchLId lid `orSearch` searchLType tp
 searchSig (SpecSig lid tp _) = searchLId lid `orSearch` searchLType tp
@@ -373,19 +306,19 @@ searchSig (FixSig fix) = searchFixitySig fix
 -- ----------------------------------------------------------------------------
 -- FixitySig
 
-searchLFixitySig fix = lsearch searchFixitySig fix
+searchLFixitySig = lsearch searchFixitySig
 
 searchFixitySig (FixitySig lid _) = searchLId lid
 
 -- ----------------------------------------------------------------------------
 -- Types
 
-searchLTypes ltps = searchList searchLType ltps
+searchLTypes = searchList searchLType
 
-searchLType lty = lsearch searchType lty
+searchLType = lsearch searchType
 
 searchType (HsForAllTy _ _ ctxt tp) = searchLContext ctxt `orSearch` searchLType tp
-searchType (HsTyVar id) = Search $ (\line col idmap ret -> ret id)
+searchType (HsTyVar id) = Search (\line col idmap ret -> ret id)
 searchType (HsBangTy _ tp) = searchLType tp
 searchType (HsAppTy tp1 tp2) = searchLType tp1 `orSearch` searchLType tp2
 searchType (HsFunTy tp1 tp2) = searchLType tp1 `orSearch` searchLType tp2
@@ -400,9 +333,9 @@ searchType _ = failSearch
 -- ----------------------------------------------------------------------------
 -- Context
 
-searchLContext lctxt = lsearch searchContext lctxt
+searchLContext = lsearch searchContext
 
-searchContext lpreds = searchList searchLPred lpreds
+searchContext = searchList searchLPred
 
 -- ----------------------------------------------------------------------------
 -- Pred
@@ -416,7 +349,7 @@ searchPred (HsIParam _ tp) = searchLType tp
 -- ----------------------------------------------------------------------------
 -- TyClDecl
 
-searchLTyClDecl ltyClass = lsearch searchTyClDecl ltyClass
+searchLTyClDecl = lsearch searchTyClDecl
 
 searchTyClDecl (ForeignType lid _ _) = searchLId lid
 searchTyClDecl td@(TyData {}) =
@@ -436,20 +369,12 @@ searchTyClDecl cd@(ClassDecl {}) =
 -- ----------------------------------------------------------------------------
 -- ConDecl
   
-searchLConDecl lconDecl = lsearch searchConDecl lconDecl
-#if __GLASGOW_HASKELL__ > 606
+searchLConDecl = lsearch searchConDecl
 searchConDecl (ConDecl lid _ lbndrs lctxt details res _) =
-#else
-searchConDecl (ConDecl lid _ lbndrs lctxt details res) =
-#endif
   searchLId lid `orSearch`
   searchList searchLBndr lbndrs `orSearch`
   searchLContext lctxt `orSearch`
-#if __GLASGOW_HASKELL__ > 606
   searchConDeclDetails searchLType details `orSearch`
-#else
-  searchConDetails searchLType details `orSearch`
-#endif
   searchResType res
   where
     searchResType ResTyH98          = failSearch
@@ -461,13 +386,9 @@ searchConDecl (ConDecl lid _ lbndrs lctxt details res) =
 -- ----------------------------------------------------------------------------
 -- InstDecl
 
-searchLInstDecl linstDecl = lsearch searchInstDecl linstDecl
+searchLInstDecl = lsearch searchInstDecl
 
-#if __GLASGOW_HASKELL__ > 606
 searchInstDecl (InstDecl ltp lbinds lsigs _) =
-#else
-searchInstDecl (InstDecl ltp lbinds lsigs) =
-#endif
   searchLType ltp `orSearch`
   searchLBinds lbinds `orSearch`
   searchList searchLSig lsigs
@@ -475,14 +396,14 @@ searchInstDecl (InstDecl ltp lbinds lsigs) =
 -- ----------------------------------------------------------------------------
 -- DefaultDecl
 
-searchLDefaultDecl ldefDecl = lsearch searchDefaultDecl ldefDecl
+searchLDefaultDecl = lsearch searchDefaultDecl
 
 searchDefaultDecl (DefaultDecl ltps) = searchLTypes ltps
 
 -- ----------------------------------------------------------------------------
 -- ForeignDecl
 
-searchLForeignDecl lfDecl = lsearch searchForeignDecl lfDecl
+searchLForeignDecl = lsearch searchForeignDecl
 
 searchForeignDecl (ForeignImport lid ltp _) = searchLId lid `orSearch` searchLType ltp
 searchForeignDecl (ForeignExport lid ltp _) = searchLId lid `orSearch` searchLType ltp
@@ -490,7 +411,7 @@ searchForeignDecl (ForeignExport lid ltp _) = searchLId lid `orSearch` searchLTy
 -- ----------------------------------------------------------------------------
 -- RuleDecl
 
-searchLRuleDecl lruleDecl = lsearch searchRuleDecl lruleDecl
+searchLRuleDecl = lsearch searchRuleDecl
 
 searchRuleDecl (HsRule _ _ bndrs lexpr1 _ lexpr2 _) =
   searchList searchRuleBndr bndrs `orSearch`
@@ -500,12 +421,6 @@ searchRuleDecl (HsRule _ _ bndrs lexpr1 _ lexpr2 _) =
 searchRuleBndr (RuleBndr lid) = searchLId lid
 searchRuleBndr (RuleBndrSig lid ltp) = searchLId lid `orSearch` searchLType ltp
 
--- ----------------------------------------------------------------------------
--- DeprecDecl
-
-#if __GLASGOW_HASKELL__ < 610
-searchLDeprecDecl (L span (Deprecation id _)) = checkId span id
-#endif
 
 -- ----------------------------------------------------------------------------
 -- Group
@@ -517,21 +432,14 @@ searchGroup g@(HsGroup {}) =
   searchList searchLFixitySig (hs_fixds g) `orSearch`
   searchList searchLDefaultDecl (hs_defds g) `orSearch`
   searchList searchLForeignDecl (hs_fords g) `orSearch`
-#if __GLASGOW_HASKELL__ < 610
-  searchList searchLDeprecDecl (hs_depds g) `orSearch`
-#endif
   searchList searchLRuleDecl (hs_ruleds g)
 
 -- ----------------------------------------------------------------------------
 -- ImportDecl
 
-searchLImportDecl ldecl = lsearch searchImportDecl ldecl
+searchLImportDecl = lsearch searchImportDecl
 
-#if __GLASGOW_HASKELL__ >= 610
 searchImportDecl (ImportDecl (L span modl) _ _ _ _ _) = inSpan span (Search $ \_ _ _ _ -> FoundModule modl)
-#else
-searchImportDecl (ImportDecl (L span modl) _ _ _ _) = inSpan span (Search $ \_ _ _ _ -> FoundModule modl)
-#endif
 
 -- ----------------------------------------------------------------------------
 -- Utils

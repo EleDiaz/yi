@@ -8,18 +8,24 @@ import Data.Binary
 import System.Exit
   ( ExitCode( ExitSuccess,ExitFailure ) )
 import Control.Exception(SomeException)
-import Control.Monad.Trans (MonadIO (..))
+import Control.Monad.Base
 {- External Library Module Imports -}
 {- Local (yi) module imports -}
 
-import Prelude ()
+import Control.Applicative
+import Control.Monad
+import Control.Lens
 import Yi.Core
 import Yi.MiniBuffer
 import qualified Yi.Mode.Compilation as Compilation
 import Yi.Process
-import Yi.UI.Common 
+import Yi.UI.Common
 import qualified Yi.Mode.Interactive as Interactive
 import qualified Data.Rope as R
+import Data.Default
+import Data.Typeable
+import Yi.Utils
+import Yi.Monad
 
 ---------------------------
 -- | Changing the buffer name quite useful if you have
@@ -30,29 +36,37 @@ changeBufferNameE =
   withMinibufferFree "New buffer name:" strFun
   where
   strFun :: String -> YiM ()
-  strFun = withBuffer . putA identA . Left
+  strFun = withBuffer . assign identA . Left
 
 ----------------------------
 -- | shell-command with argument prompt
 shellCommandE :: YiM ()
-shellCommandE = do
+shellCommandE =
     withMinibufferFree "Shell command:" shellCommandV
 
 ----------------------------
 -- | shell-command with a known argument
 shellCommandV :: String -> YiM ()
 shellCommandV cmd = do
-      (cmdOut,cmdErr,exitCode) <- liftIO $ runShellCommand cmd
+      (exitCode,cmdOut,cmdErr) <- liftBase $ runShellCommand cmd
       case exitCode of
-        ExitSuccess -> withEditor $ newBufferE (Left "Shell Command Output") (R.fromString cmdOut) >> return ()
-        -- FIXME: here we get a string and convert it back to utf8; this indicates a possible bug.
+        ExitSuccess -> if length (filter (== '\n') cmdOut) > 1
+                       then withEditor . void $ -- see GitHub issue #477
+                              newBufferE (Left "Shell Command Output")
+                                         (R.fromString cmdOut)
+                       else msgEditor $ case cmdOut of
+                         "" -> "(Shell command with no output)"
+                         -- Drop trailing newline from output
+                         xs -> if last xs == '\n' then init xs else xs
+        -- FIXME: here we get a string and convert it back to utf8;
+        -- this indicates a possible bug.
         ExitFailure _ -> msgEditor cmdErr
 
 ----------------------------
 -- Cabal-related commands
 -- TODO: rename to "BuildBuffer" or something.
 newtype CabalBuffer = CabalBuffer {cabalBuffer :: Maybe BufferRef}
-    deriving (Initializable, Typeable, Binary)
+    deriving (Default, Typeable, Binary)
 
 instance YiVariable CabalBuffer
 
@@ -95,7 +109,7 @@ cabalBuildE = cabalRun "build" (const $ return ())
 shell :: YiM BufferRef
 shell = do
     sh <- io shellFileName
-    Interactive.interactive sh ["-i"]
+    Interactive.spawnProcess sh ["-i"]
     -- use the -i option for interactive mode (assuming bash)
 
 -- | Search the source files in the project.
@@ -105,7 +119,7 @@ searchSources = grepFind (Doc "*.hs")
 -- | Perform a find+grep operation
 grepFind :: String ::: FilePatternTag -> String ::: RegexTag -> YiM ()
 grepFind (Doc filePattern) (Doc searchedRegex) = withOtherWindow $ do
-    discard $ startSubprocess "find" [".",
+    void $ startSubprocess "find" [".",
                                       "-name", "_darcs", "-prune", "-o",
                                       "-name", filePattern, "-exec", "grep", "-Hnie", searchedRegex, "{}", ";"] (const $ return ())
     withBuffer $ setMode Compilation.mode

@@ -10,7 +10,7 @@ import Shim.Utils
 import SrcLoc
 import ErrUtils ( Severity(..) )
 import FastString
-import Directory
+import System.Directory
 
 import Control.Monad.State
 import System.FilePath ( (</>) )
@@ -24,7 +24,7 @@ simpleCompleteModule filename name = do
 fuzzyCompleteModule :: FilePath -> String -> SHM (Response [[String]])
 fuzzyCompleteModule filename name = do
   l <- Hsinfo.findModulesPrefix filename name
-  retVal (map (\x -> [x,"","",""]) l)                              
+  retVal (map (\x -> [x,"","",""]) l)
 
 getModuleExports :: FilePath -> String -> String -> SHM (Response [[String]])
 getModuleExports filename name prefix = do
@@ -32,7 +32,7 @@ getModuleExports filename name prefix = do
   retVal (map (\(x,y) -> [x,y,"",""]) l)
 
 quit :: SHM (Response ())
-quit = do 
+quit = do
   logInfo "received the quit command, exiting"
   error "quit"
   return$ Error "quit"
@@ -45,7 +45,7 @@ fuzzyCompleteIdentifier filename name = do
 simpleCompleteIdentifier :: FilePath -> String -> SHM (Response ([String], String))
 simpleCompleteIdentifier filename name = do
   l <- map fst `fmap` Hsinfo.findIdPrefix filename name
-  retVal $ (l, commonPrefix l)
+  retVal (l, commonPrefix l)
 
 bufferNeedsPreprocessing :: FilePath -> String -> SHM (Response [Bool])
 bufferNeedsPreprocessing filename source = do
@@ -87,7 +87,7 @@ retVal = return . Response
 
 encodeSrcLoc :: SrcLoc -> SHM Se
 encodeSrcLoc srcLoc
-  | isGoodSrcLoc srcLoc = do projectDir <- io $ Directory.getCurrentDirectory
+  | isGoodSrcLoc srcLoc = do projectDir <- io Directory.getCurrentDirectory
                              let filename0 = unpackFS $ srcLocFile srcLoc
                                  filename = case filename0 of
                                               ('/':_) -> filename0
@@ -102,17 +102,17 @@ encodeNotes l =
   Se . map (\c -> (encodeSeverity (severity c),
                    encodeSrcSpan c (projectdir c),
                    show (message c (pprStyle c)))) $ l
- where encodeSeverity SevInfo    = S ":sev-info" 
+ where encodeSeverity SevInfo    = S ":sev-info"
        encodeSeverity SevWarning = S ":sev-warning"
        encodeSeverity SevError   = S ":sev-error"
        encodeSeverity SevFatal   = S ":sev-fatal"
        encodeSrcSpan s dir =
          maybe (Se nil)
-               (\(f,l1,c1,l2,c2) -> if l1==l2 && c1==c2  -- hack to deal with empty 
-                                                         -- spans(emacs gets confused), 
-                                                         -- due to parsing errors 
-                                    then Se (S ":span",f,l1,c1,l2,c2+1)
-                                    else Se (S ":span",f,l1,c1,l2,c2))
+               (\(f,l1,c1,l2,c2) -> (Se (if l1==l2 && c1==c2  -- hack to deal with empty
+                                                         -- spans(emacs gets confused),
+                                                         -- due to parsing errors
+                                    then (S ":span",f,l1,c1,l2,c2+1)
+                                    else (S ":span",f,l1,c1,l2,c2))))
                $ excToMaybe $
          let loc1 = srcSpanStart $ srcSpan s
              loc2 = srcSpanEnd $ srcSpan s

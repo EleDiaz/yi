@@ -1,4 +1,4 @@
-module Yi.Event 
+module Yi.Event
     (
      Event(..), prettyEvent,
      Key(..), Modifier(..),
@@ -10,9 +10,6 @@ module Yi.Event
 import Data.Bits
 import Data.Char (chr,ord)
 import Data.Monoid
-import Data.List ( (!!) )
-import Yi.Prelude
-import Prelude ()
 
 data Modifier = MShift | MCtrl | MMeta | MSuper | MHyper
                 deriving (Show,Eq,Ord)
@@ -37,7 +34,7 @@ prettyEvent (Event k mods) =
         prettyKey (KASCII c) = [c]
         prettyKey key = tail $ show key
         prettyModifier m = [ show m !! 1]
-      
+
 
 
 -- | Map an Event to a Char. This is used in the emacs keymap for Ctrl-Q and vim keymap 'insertSpecialChar'
@@ -48,8 +45,7 @@ eventToChar (Event KBS _)    = '\127'
 eventToChar (Event KTab _)   = '\t'
 
 eventToChar (Event (KASCII c) mods) = (if MMeta `elem` mods then setMeta else id) $
-                                      (if MCtrl `elem` mods then ctrlLowcase else id) $
-                                      c
+                                      (if MCtrl `elem` mods then ctrlLowcase else id) c
 
 eventToChar _ev = '?'
 

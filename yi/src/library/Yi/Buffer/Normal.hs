@@ -11,7 +11,7 @@
 
 module Yi.Buffer.Normal (TextUnit(Character, Line, VLine, Document, GenUnit),
                          outsideUnit,
-                         leftBoundaryUnit,                         
+                         leftBoundaryUnit,
                          unitWord,
                          unitViWord,
                          unitViWORD,
@@ -26,7 +26,7 @@ module Yi.Buffer.Normal (TextUnit(Character, Line, VLine, Document, GenUnit),
                          -- we'd like to move more units to the GenUnit format.
                          moveB, maybeMoveB,
                          transformB, transposeB,
-                         regionOfB, regionOfNonEmptyB, regionOfPartB, 
+                         regionOfB, regionOfNonEmptyB, regionOfPartB,
                          regionOfPartNonEmptyB, regionOfPartNonEmptyAtB,
                          readPrevUnitB, readUnitB,
                          untilB, doUntilB_, untilB_, whileB, doIfCharB,
@@ -44,11 +44,11 @@ module Yi.Buffer.Normal (TextUnit(Character, Line, VLine, Document, GenUnit),
                          , regionStyleA
                          ) where
 
-import Prelude(length, subtract)
-import Yi.Prelude
-
+import Control.Lens hiding (moveTo)
 import Data.Binary
 import Data.DeriveTH
+import Data.Default
+import Data.Typeable
 import Data.List (sort)
 
 import Yi.Buffer.Basic
@@ -68,12 +68,12 @@ data RegionStyle = LineWise
 $(derive makeBinary ''RegionStyle)
 
 -- TODO: put in the buffer state proper.
-instance Initializable RegionStyle where
-  initial = Inclusive
+instance Default RegionStyle where
+  def = Inclusive
 
 instance YiVariable RegionStyle
 
-regionStyleA :: Accessor FBuffer RegionStyle
+regionStyleA :: Lens' FBuffer RegionStyle
 regionStyleA = bufferDynamicValueA
 
 convertRegionToStyleB :: Region -> RegionStyle -> BufferM Region

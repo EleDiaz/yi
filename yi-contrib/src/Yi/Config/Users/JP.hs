@@ -10,16 +10,16 @@ import Yi.Keymap.Emacs (mkKeymap, defKeymap, ModeMap(..))
 -- If configured with ghcAPI, Shim Mode can be enabled:
 -- import qualified Yi.Mode.Shim as Shim
 
-import Data.List (drop, length)
+import Control.Applicative
+import Control.Lens
+import Data.Traversable (sequenceA)
+import Data.Foldable (Foldable,find)
 import Data.Monoid
-import Prelude ()
 import Yi.Char.Unicode
 import Yi.Hoogle
-import Yi.Keymap.Keys
 import Yi.Lexer.Alex (tokToSpan, Tok)
 import Yi.Lexer.Haskell as Hask
 import Yi.Mode.Haskell as Haskell
-import Yi.Prelude
 import Yi.String
 import Yi.Syntax
 import Yi.Syntax.Tree
@@ -65,7 +65,7 @@ haskellModeHooks mode =
                         -- modeGetStrokes = \_ _ _ _ -> [],
                         modeName = "my " ++ modeName mode,
                         -- example of Mode-local rebinding
-                        modeKeymap = topKeymapA ^: ((ctrlCh 'c' ?>> choice [ctrlCh 'l' ?>>! ghciLoadBuffer,
+                        modeKeymap = topKeymapA %~ ((ctrlCh 'c' ?>> choice [ctrlCh 'l' ?>>! ghciLoadBuffer,
                                                               ctrl (char 'z') ?>>! ghciGet,
                                                               ctrl (char 'h') ?>>! hoogle,
                                                               ctrlCh 'r' ?>>! ghciSend ":r",
@@ -88,12 +88,7 @@ tta :: Yi.Lexer.Alex.Tok Token -> Maybe (Yi.Syntax.Span String)
 tta = sequenceA . tokToSpan . (fmap Yi.Config.Users.JP.tokenToText)
 
 frontend :: UIBoot
-frontendName :: String
-Just (frontendName, frontend) = foldr1 (<|>) $ fmap (\nm -> find ((nm ==) . fst) availableFrontends) ["cocoa", "vty"] 
-
-isCocoa :: Bool
-isCocoa = frontendName == "cocoa"
-
+Just (_, frontend) = foldr1 (<|>) $ fmap (\nm -> find ((nm ==) . fst) availableFrontends) ["vty"] 
 
 defaultConfig :: Config
 defaultConfig = defaultEmacsConfig
@@ -127,7 +122,7 @@ config = defaultConfig {
                                      : AnyMode (haskellModeHooks Haskell.literateMode) 
                                      : modeTable defaultConfig,
                            configUI = (configUI defaultConfig) 
-                             { configFontSize = if isCocoa then Just 12 else Just 10
+                             { configFontSize = Just 10
                                -- , configTheme = darkBlueTheme
                              , configTheme = defaultTheme `override` \superTheme _ -> superTheme
                                {
